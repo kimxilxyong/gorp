@@ -1,3 +1,9 @@
+@Kim:
+This is a fork of http://github.com/go-gorp/gorp
+The purpose of this fork is to implement automatic index generation from tags or from go code directly
+It was forked on 2015.05.16
+Work for index support is not finished yet.
+
 # Go Relational Persistence
 
 [![build status](https://secure.travis-ci.org/go-gorp/gorp.png)](http://travis-ci.org/go-gorp/gorp)
