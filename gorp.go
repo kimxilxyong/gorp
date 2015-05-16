@@ -190,6 +190,7 @@ type TableMap struct {
 	SchemaName     string
 	gotype         reflect.Type
 	Columns        []*ColumnMap
+	Indexes        []*IndexMap
 	keys           []*ColumnMap
 	uniqueTogether [][]string
 	version        *ColumnMap
@@ -587,6 +588,19 @@ type ColumnMap struct {
 	isNotNull  bool
 }
 
+// IndexMap represents the data to create an index
+type IndexMap struct {
+	// Index name in db table
+	IndexName string
+
+	// If true, " unique" is added to the create index statement.
+	Unique bool
+
+	// List of fields for the index
+	fieldNames []string
+	gotype     reflect.Type
+}
+
 // Rename allows you to specify the column name in the table
 //
 // Example:  table.ColMap("Updated").Rename("date_updated")
@@ -737,6 +751,9 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 
 	tmap := &TableMap{gotype: t, TableName: name, SchemaName: schema, dbmap: m}
 	tmap.Columns = m.readStructColumns(t)
+
+	tmap.Indexes = m.readStructIndexes(t)
+
 	m.tables = append(m.tables, tmap)
 
 	return tmap
@@ -798,6 +815,46 @@ func (m *DbMap) readStructColumns(t reflect.Type) (cols []*ColumnMap) {
 			}
 			if shouldAppend {
 				cols = append(cols, cm)
+			}
+		}
+	}
+	return
+}
+
+func (m *DbMap) readStructIndexes(t reflect.Type) (indexes []*IndexMap) {
+	var shouldAppend bool
+	n := t.NumField()
+	for i := 0; i < n; i++ {
+		f := t.Field(i)
+		if f.Anonymous && f.Type.Kind() == reflect.Struct {
+			shouldAppend = false
+
+		} else {
+			tagstring := f.Tag.Get("db")
+			if tagstring != "" {
+				println(tagstring)
+
+				tags := strings.Split(tagstring, ",")
+				/*
+				   				for tag := range tags {
+				   					o := strings.Split(tag, ":")
+				   					if o[0] == "index" {
+
+				   }
+				   					  }
+				   				}
+				*/
+				im := &IndexMap{
+					IndexName:  "TestIndex",
+					fieldNames: []string{"Field1", "Field2"},
+				}
+				// Check for nested fields of the same field name and
+				// override them.
+				shouldAppend = true
+
+				if shouldAppend {
+					indexes = append(indexes, im)
+				}
 			}
 		}
 	}
@@ -900,6 +957,41 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 			break
 		}
 	}
+
+	if err == nil {
+		err = m.createIndexes(ifNotExists)
+	}
+
+	return err
+}
+
+func (m *DbMap) createIndexes(ifNotExists bool) error {
+	var err error
+	indexCreate := "create index"
+
+	for _, table := range m.tables {
+		for _, index := range table.Indexes {
+
+			s := bytes.Buffer{}
+
+			s.WriteString(indexCreate)
+			s.WriteString(fmt.Sprintf(" %s ", index.IndexName))
+			s.WriteString(fmt.Sprintf(" on %s (", m.Dialect.QuotedTableForQuery(table.SchemaName, table.TableName)))
+
+			sep := ""
+			for _, field := range index.fieldNames {
+				s.WriteString(sep + field)
+				sep = ","
+			}
+			s.WriteString(")")
+
+			_, err = m.Exec(s.String())
+			if err != nil {
+				break
+			}
+		}
+	}
+
 	return err
 }
 
