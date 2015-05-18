@@ -59,6 +59,12 @@ type Dialect interface {
 	IfSchemaNotExists(command, schema string) string
 	IfTableExists(command, schema, table string) string
 	IfTableNotExists(command, schema, table string) string
+
+	// Sql to check if an index exists
+	IfIndexExists(table, index, schema string) string
+
+	// Returns the sql to drop an index
+	DropIndex(table *TableMap, index string) string
 }
 
 // IntegerAutoIncrInserter is implemented by dialects that can perform
@@ -443,6 +449,25 @@ func (d MySQLDialect) IfTableExists(command, schema, table string) string {
 
 func (d MySQLDialect) IfTableNotExists(command, schema, table string) string {
 	return fmt.Sprintf("%s if not exists", command)
+}
+
+func (d MySQLDialect) IfIndexExists(table, index, schema string) string {
+	sql := "select COLUMN_NAME as ColumnName " +
+		"from INFORMATION_SCHEMA.STATISTICS " +
+		"where table_name = '" + table + "' " +
+		"and index_name = '" + index + "' "
+	if schema != "" {
+		sql = sql + "and table_schema = '" + schema + "'"
+	}
+	sql = sql + "order by SEQ_IN_INDEX asc"
+
+	return sql
+}
+
+func (d MySQLDialect) DropIndex(table *TableMap, index string) string {
+
+	sql := "drop table " + index + " " + d.QuotedTableForQuery(table.SchemaName, table.TableName)
+	return sql
 }
 
 ///////////////////////////////////////////////////////
