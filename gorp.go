@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -780,6 +781,9 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 			}
 		} else {
 			var columnName string
+			var maxColumnSize int
+			var isNotNull bool
+			var isUnique bool
 
 			ts := f.Tag.Get("db")
 			if ts == "-" {
@@ -791,9 +795,16 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				for _, tag := range tags {
 					o := strings.Split(tag, ":")
 					o[0] = strings.Trim(o[0], " ")
-					if o[0] == "name" {
+					switch o[0] {
+					case "name":
 						columnName = o[1]
-					} else {
+					case "size":
+						maxColumnSize, _ = strconv.Atoi(o[1])
+					case "notnull":
+						isNotNull = true
+					case "unique":
+						isUnique = true
+					default:
 						// Fallback to traditional gorp tags - use it as fieldname if its nether an index or a type
 						if o[0] != "index" && o[0] != "type" && len(o) == 1 {
 							columnName = o[0]
@@ -823,6 +834,9 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				Transient:  columnName == "-",
 				fieldName:  f.Name,
 				gotype:     gotype,
+				MaxSize:    maxColumnSize,
+				isNotNull:  isNotNull,
+				Unique:     isUnique,
 			}
 			// Check for nested fields of the same field name and
 			// override them.
@@ -844,7 +858,7 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 	return
 }
 
-// Adds IndexMaps from Field tags
+// addIndexForColumn adds IndexMaps from Field tags
 // Example:
 // type Post struct {
 //	Id       uint64
@@ -986,6 +1000,10 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 				s.WriteString(")")
 			}
 		}
+
+		// DEBUG
+		fmt.Println(s.String())
+
 		s.WriteString(") ")
 		s.WriteString(m.Dialect.CreateTableSuffix())
 		s.WriteString(m.Dialect.QuerySuffix())
