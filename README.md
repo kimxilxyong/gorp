@@ -31,7 +31,7 @@ Changing the name, size of varchars and notnull is straightforward i think.
 
 I have this tested only on MySQL for now, but my next step is to test it on Postgres.
 
-I will would be very gratefull if anybody could test this on oracle and mysql!
+I will would be very gratefull if anybody could test this on oracle and/or on sqlserver!
 
 My goal is to have this additions sometime merged into the upstream github.com/go-gorp/gorp
 
