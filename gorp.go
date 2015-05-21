@@ -759,6 +759,10 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 }
 
 func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnMap) {
+
+	// Create slice for primary keys - initially empty
+	tm.keys = make([]*ColumnMap, 0)
+
 	n := t.NumField()
 	for i := 0; i < n; i++ {
 		f := t.Field(i)
@@ -784,12 +788,15 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 			var maxColumnSize int
 			var isNotNull bool
 			var isUnique bool
+			var isPk bool
+			var isAutoIncr bool
 
 			ts := f.Tag.Get("db")
 			if ts == "-" {
 				// Ignore this column
-				columnName = ts
+				columnName = "-"
 			} else {
+
 				// Get all params from tagstring
 				tags := strings.Split(ts, ",")
 				for _, tag := range tags {
@@ -797,24 +804,31 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 					o[0] = strings.Trim(o[0], " ")
 					switch o[0] {
 					case "name":
-						columnName = o[1]
+						columnName = strings.Trim(o[1], " ")
 					case "size":
 						maxColumnSize, _ = strconv.Atoi(o[1])
 					case "notnull":
 						isNotNull = true
 					case "unique":
 						isUnique = true
+					case "autoincrement":
+						isAutoIncr = true
+					case "primarykey":
+						isPk = true
+
 					default:
 						// Fallback to traditional gorp tags - use it as fieldname if its nether an index or a type
-						if o[0] != "index" && o[0] != "type" && len(o) == 1 {
+						//if o[0] != "index" && o[0] != "type" && len(o) == 1 {
+						if len(o) == 1 {
 							columnName = o[0]
 						}
 					}
 
 				}
 				if columnName == "" {
-					columnName = f.Name
+					columnName = strings.Trim(strings.Split(f.Name, ",")[0], " ")
 				}
+
 			}
 
 			gotype := f.Type
@@ -829,6 +843,7 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 					gotype = reflect.TypeOf(scanner.Holder)
 				}
 			}
+
 			cm := &ColumnMap{
 				ColumnName: columnName,
 				Transient:  columnName == "-",
@@ -837,6 +852,8 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				MaxSize:    maxColumnSize,
 				isNotNull:  isNotNull,
 				Unique:     isUnique,
+				isPK:       isPk,
+				isAutoIncr: isAutoIncr,
 			}
 			// Check for nested fields of the same field name and
 			// override them.
@@ -852,9 +869,21 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				cols = append(cols, cm)
 				tag := f.Tag.Get("db")
 				tm.Indexes = m.addIndexForColumn(cm, tag, tm.Indexes)
+				println("DebugAdd Key columname:" + columnName)
+				if isPk {
+					colmap := &ColumnMap{ColumnName: cm.ColumnName, fieldName: cm.fieldName}
+					colmap.isPK = isPk
+					colmap.isAutoIncr = isAutoIncr
+					tm.keys = append(tm.keys, colmap)
+				}
+
 			}
+
 		}
 	}
+
+	tm.ResetSql()
+
 	return
 }
 
