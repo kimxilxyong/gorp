@@ -1,5 +1,6 @@
 Today (2015.05.21) i added a lot of new field tags which create a new table:
 
+```
 Example:
 // holds a single post
 type Post struct {
@@ -19,6 +20,7 @@ type Post struct {
 	Body         string    `db:"name:PostBody, size:16384"`
 	Err          error     `db:"-"` // ignore this field when storing with gorp
 }
+```
 
 The primary key is combined from two fields in this example (PID and Created)
 It seems that a multifield primary key can only have one autoincrement (at least on MySQL, i have to test Postgres and SQLLite to be sure)
