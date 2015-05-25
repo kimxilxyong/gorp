@@ -55,6 +55,13 @@ type Dialect interface {
 	// table - The table name
 	QuotedTableForQuery(schema string, table string) string
 
+	// Handles building up of a schema.database string that is compatible with
+	// the given dialect
+	//
+	// schema - The schema that <index> lives in
+	// index - The table name
+	QuotedIndex(schema string, index string) string
+
 	// Existance clause for table creation / deletion
 	IfSchemaNotExists(command, schema string) string
 	IfTableExists(command, schema, table string) string
@@ -302,7 +309,15 @@ func (d PostgresDialect) QuotedTableForQuery(schema string, table string) string
 		return d.QuoteField(table)
 	}
 
-	return schema + "." + d.QuoteField(table)
+	return strings.ToLower(schema + "." + d.QuoteField(table))
+}
+
+func (d PostgresDialect) QuotedIndex(schema string, index string) string {
+	if strings.TrimSpace(schema) == "" {
+		return d.QuoteField(index)
+	}
+
+	return strings.ToLower(schema + "." + d.QuoteField(index))
 }
 
 func (d PostgresDialect) IfSchemaNotExists(command, schema string) string {
@@ -315,6 +330,42 @@ func (d PostgresDialect) IfTableExists(command, schema, table string) string {
 
 func (d PostgresDialect) IfTableNotExists(command, schema, table string) string {
 	return fmt.Sprintf("%s if not exists", command)
+}
+
+func (d PostgresDialect) IfIndexExists(table, index, schema string) string {
+
+	sql := `select
+		    a.attname as ColumnName
+		from
+		    pg_class t,
+		    pg_class i,
+		    pg_index ix,
+		    pg_attribute a,
+		    pg_namespace n
+		where
+		    t.oid = ix.indrelid
+		    and i.oid = ix.indexrelid
+		    and a.attrelid = t.oid
+		    and a.attnum = ANY(ix.indkey)
+		    and t.relkind = 'r'
+		    and t.relname = '` + strings.ToLower(table) + `'
+			and i.relname = '` + strings.ToLower(index) + `'`
+
+	if schema != "" {
+		sql = sql + " and n.nspname = '" + strings.ToLower(schema) + "'"
+	}
+	sql = sql + ` and n.oid = t.relnamespace
+		order by
+		    t.relname,
+		    i.relname;`
+
+	return sql
+}
+
+func (d PostgresDialect) DropIndex(table *TableMap, index string) string {
+
+	sql := "drop index " + d.QuotedIndex(table.SchemaName, index)
+	return sql
 }
 
 ///////////////////////////////////////////////////////
@@ -439,6 +490,14 @@ func (d MySQLDialect) QuotedTableForQuery(schema string, table string) string {
 	return schema + "." + d.QuoteField(table)
 }
 
+func (d MySQLDialect) QuotedIndex(schema string, index string) string {
+	if strings.TrimSpace(schema) == "" {
+		return d.QuoteField(index)
+	}
+
+	return schema + "." + d.QuoteField(index)
+}
+
 func (d MySQLDialect) IfSchemaNotExists(command, schema string) string {
 	return fmt.Sprintf("%s if not exists", command)
 }
@@ -466,7 +525,7 @@ func (d MySQLDialect) IfIndexExists(table, index, schema string) string {
 
 func (d MySQLDialect) DropIndex(table *TableMap, index string) string {
 
-	sql := "drop table " + index + " " + d.QuotedTableForQuery(table.SchemaName, table.TableName)
+	sql := "drop index " + index + " " + d.QuotedIndex(table.SchemaName, index)
 	return sql
 }
 

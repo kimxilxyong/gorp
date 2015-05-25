@@ -181,6 +181,8 @@ type DbMap struct {
 	tables    []*TableMap
 	logger    GorpLogger
 	logPrefix string
+
+	DebugLevel int
 }
 
 // TableMap represents a mapping between a Go struct and a database table
@@ -784,51 +786,11 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				}
 			}
 		} else {
-			var columnName string
-			var maxColumnSize int
-			var isNotNull bool
-			var isUnique bool
-			var isPk bool
-			var isAutoIncr bool
 
-			ts := f.Tag.Get("db")
-			if ts == "-" {
-				// Ignore this column
-				columnName = "-"
-			} else {
+			columnName, maxColumnSize, isNotNull, isUnique, isAutoIncr, isPk := m.ParseTag(f.Tag)
 
-				// Get all params from tagstring
-				tags := strings.Split(ts, ",")
-				for _, tag := range tags {
-					o := strings.Split(tag, ":")
-					o[0] = strings.Trim(o[0], " ")
-					switch o[0] {
-					case "name":
-						columnName = strings.Trim(o[1], " ")
-					case "size":
-						maxColumnSize, _ = strconv.Atoi(o[1])
-					case "notnull":
-						isNotNull = true
-					case "unique":
-						isUnique = true
-					case "autoincrement":
-						isAutoIncr = true
-					case "primarykey":
-						isPk = true
-
-					default:
-						// Fallback to traditional gorp tags - use it as fieldname if its nether an index or a type
-						//if o[0] != "index" && o[0] != "type" && len(o) == 1 {
-						if len(o) == 1 {
-							columnName = o[0]
-						}
-					}
-
-				}
-				if columnName == "" {
-					columnName = strings.Trim(strings.Split(f.Name, ",")[0], " ")
-				}
-
+			if columnName == "" {
+				columnName = strings.Trim(strings.Split(f.Name, ",")[0], " ")
 			}
 
 			gotype := f.Type
@@ -869,7 +831,6 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				cols = append(cols, cm)
 				tag := f.Tag.Get("db")
 				tm.Indexes = m.addIndexForColumn(cm, tag, tm.Indexes)
-				println("DebugAdd Key columname:" + columnName)
 				if isPk {
 					colmap := &ColumnMap{ColumnName: cm.ColumnName, fieldName: cm.fieldName}
 					colmap.isPK = isPk
@@ -1030,12 +991,14 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 			}
 		}
 
-		// DEBUG
-		fmt.Println(s.String())
-
 		s.WriteString(") ")
 		s.WriteString(m.Dialect.CreateTableSuffix())
 		s.WriteString(m.Dialect.QuerySuffix())
+
+		// DEBUG
+		if m.DebugLevel > 2 {
+			println("Create tables SQL: " + s.String())
+		}
 		_, err = m.Exec(s.String())
 		if err != nil {
 			break
@@ -1079,16 +1042,22 @@ func (m *DbMap) createIndexes(ifNotExists bool) error {
 			s := bytes.Buffer{}
 
 			s.WriteString(indexCreate)
-			s.WriteString(fmt.Sprintf(" %s ", index.IndexName))
+			s.WriteString(fmt.Sprintf(" %s ", m.Dialect.QuotedIndex("", index.IndexName)))
+
 			s.WriteString(fmt.Sprintf(" on %s (", m.Dialect.QuotedTableForQuery(table.SchemaName, table.TableName)))
 
 			sep := ""
 			for _, field := range index.fieldNames {
-				s.WriteString(sep + field)
+				s.WriteString(sep + m.Dialect.QuoteField(field))
 				sep = ","
 			}
 			s.WriteString(")")
-
+			// DEBUG
+			fmt.Println("\nCreate INDEX")
+			fmt.Println("\nCreate INDEX")
+			fmt.Println("\nCreate INDEX")
+			fmt.Println("\nCreate INDEX")
+			fmt.Println(s.String())
 			_, err = m.Exec(s.String())
 			if err != nil {
 				err = errors.New("Create index " + index.IndexName + " failed: " + err.Error())
@@ -1115,6 +1084,12 @@ func (m *DbMap) checkIfIndexMatches(table *TableMap, index *IndexMap) (exists bo
 		return
 	}
 	defer rows.Close()
+
+	// DEBUG
+	if m.DebugLevel > 2 {
+		fmt.Println("GET INDEX INFO")
+		fmt.Println(sql)
+	}
 
 	// Loop over rows and fill the columnList
 	for rows.Next() {
@@ -1478,6 +1453,50 @@ func argsString(args ...interface{}) string {
 
 ///////////////
 
+// ParseTag extracts all field tags from input param tag and resturns all found options
+func (m *DbMap) ParseTag(tag reflect.StructTag) (columnName string,
+	maxColumnSize int, isNotNull bool, isUnique bool, isAutoIncr bool, isPk bool) {
+
+	ts := tag.Get("gorp")
+	if ts == "" {
+		ts = tag.Get("db")
+	}
+
+	if ts == "-" {
+		// Ignore this column
+		columnName = "-"
+	} else {
+
+		// Get all params from tagstring
+		tags := strings.Split(ts, ",")
+		for _, tag := range tags {
+			o := strings.Split(tag, ":")
+			o[0] = strings.Trim(o[0], " ")
+			switch o[0] {
+			case "name":
+				columnName = strings.Trim(o[1], " ")
+			case "size":
+				maxColumnSize, _ = strconv.Atoi(o[1])
+			case "notnull":
+				isNotNull = true
+			case "unique":
+				isUnique = true
+			case "autoincrement":
+				isAutoIncr = true
+			case "primarykey":
+				isPk = true
+
+			default:
+				// Fallback to traditional gorp tags - use it as fieldname if its nether of one of the tags above
+				if len(o) == 1 {
+					columnName = o[0]
+				}
+			}
+		}
+	}
+	return
+}
+
 // Insert has the same behavior as DbMap.Insert(), but runs in a transaction.
 func (t *Transaction) Insert(list ...interface{}) error {
 	return insert(t.dbmap, t, list...)
@@ -1786,6 +1805,7 @@ func selectVal(e SqlExecutor, holder interface{}, query string, args ...interfac
 			query, args = maybeExpandNamedQuery(m.dbmap, query, args)
 		}
 	}
+
 	rows, err := e.query(query, args...)
 	if err != nil {
 		return err
@@ -2070,9 +2090,11 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 	missingColNames := []string{}
 	for x := range cols {
 		colName := strings.ToLower(cols[x])
+
 		field, found := t.FieldByNameFunc(func(fieldName string) bool {
 			field, _ := t.FieldByName(fieldName)
-			fieldName = field.Tag.Get("db")
+
+			fieldName, _, _, _, _, _ = m.ParseTag(field.Tag)
 
 			if fieldName == "-" {
 				return false
@@ -2085,6 +2107,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 					fieldName = colMap.ColumnName
 				}
 			}
+
 			return colName == strings.ToLower(fieldName)
 		})
 		if found {
@@ -2092,6 +2115,14 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 		}
 		if colToFieldIndex[x] == nil {
 			missingColNames = append(missingColNames, colName)
+		}
+
+		if m.DebugLevel > 2 {
+			// DEBUG
+			fmt.Printf("colToFieldIndex[x]: %v\n ", colToFieldIndex[x])
+			fmt.Println("columnToFieldIndex colName: " + colName)
+			// DEBUG
+			fmt.Println("columnToFieldIndex fieldName: " + field.Name)
 		}
 	}
 	if len(missingColNames) > 0 {
