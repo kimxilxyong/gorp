@@ -16,8 +16,8 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
-	_ "github.com/mattn/go-sqlite3"
-	_ "github.com/ziutek/mymysql/godrv"
+	//_ "github.com/mattn/go-sqlite3"
+	//_ "github.com/ziutek/mymysql/godrv"
 )
 
 // verify interface compliance
@@ -53,7 +53,7 @@ type InvoiceTag struct {
 	Created  int64 `db:"myCreated"`
 	Updated  int64 `db:"date_updated"`
 	Memo     string
-	PersonId int64 `db:"person_id"`
+	PersonId int64 `db:"name: person_id, index:idx_person"`
 	IsPaid   bool  `db:"is_Paid"`
 }
 

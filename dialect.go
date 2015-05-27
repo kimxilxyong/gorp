@@ -55,13 +55,6 @@ type Dialect interface {
 	// table - The table name
 	QuotedTableForQuery(schema string, table string) string
 
-	// Handles building up of a schema.database string that is compatible with
-	// the given dialect
-	//
-	// schema - The schema that <index> lives in
-	// index - The table name
-	QuotedIndex(schema string, index string) string
-
 	// Existance clause for table creation / deletion
 	IfSchemaNotExists(command, schema string) string
 	IfTableExists(command, schema, table string) string
@@ -72,6 +65,12 @@ type Dialect interface {
 
 	// Returns the sql to drop an index
 	DropIndex(table *TableMap, index string) string
+
+	// Handles building up of a schema.database string that is compatible with
+	// the given dialect
+	// table - The table that <index> is created on
+	// index - The index name
+	BuildIndexName(table string, index string) string
 }
 
 // IntegerAutoIncrInserter is implemented by dialects that can perform
@@ -187,6 +186,10 @@ func (d SqliteDialect) QuotedTableForQuery(schema string, table string) string {
 	return d.QuoteField(table)
 }
 
+func (d SqliteDialect) QuotedIndex(table string, index string) string {
+	return d.QuoteField(index)
+}
+
 func (d SqliteDialect) IfSchemaNotExists(command, schema string) string {
 	return fmt.Sprintf("%s if not exists", command)
 }
@@ -197,6 +200,25 @@ func (d SqliteDialect) IfTableExists(command, schema, table string) string {
 
 func (d SqliteDialect) IfTableNotExists(command, schema, table string) string {
 	return fmt.Sprintf("%s if not exists", command)
+}
+
+func (d SqliteDialect) IfIndexExists(table, index, schema string) string {
+	panic("IfIndexExists not implemented for SqliteDialect")
+	return "Not Implemented"
+}
+
+// Handles building up of a schema.database string that is compatible with
+// the given dialect
+// table - The table that <index> is created on
+// index - The index name
+func (d SqliteDialect) BuildIndexName(table string, index string) string {
+	panic("BuildIndexName not implemented for SqliteDialect")
+	return "Not Implemented"
+}
+
+func (d SqliteDialect) DropIndex(table *TableMap, index string) string {
+	sql := "drop index " + index + " " + d.QuotedIndex(table.SchemaName, index)
+	return sql
 }
 
 ///////////////////////////////////////////////////////
@@ -251,7 +273,6 @@ func (d PostgresDialect) ToSqlType(val reflect.Type, maxsize int, isAutoIncr boo
 	} else {
 		return "text"
 	}
-
 }
 
 // Returns empty string
@@ -304,6 +325,12 @@ func (d PostgresDialect) QuoteField(f string) string {
 	return `"` + strings.ToLower(f) + `"`
 }
 
+// gorp with indexes, added by kim: https://github.com/kimxilxyong/gorp
+// QuoteString is used to quote strings used in a WHERE clause
+func (d PostgresDialect) QuoteString(f string) string {
+	return `'` + strings.ToLower(f) + `'`
+}
+
 func (d PostgresDialect) QuotedTableForQuery(schema string, table string) string {
 	if strings.TrimSpace(schema) == "" {
 		return d.QuoteField(table)
@@ -312,12 +339,12 @@ func (d PostgresDialect) QuotedTableForQuery(schema string, table string) string
 	return strings.ToLower(schema + "." + d.QuoteField(table))
 }
 
-func (d PostgresDialect) QuotedIndex(schema string, index string) string {
-	if strings.TrimSpace(schema) == "" {
-		return d.QuoteField(index)
+func (d PostgresDialect) BuildIndexName(table string, index string) string {
+	if strings.TrimSpace(table) == "" {
+		return index
 	}
 
-	return strings.ToLower(schema + "." + d.QuoteField(index))
+	return "ix_" + table + "_" + index
 }
 
 func (d PostgresDialect) IfSchemaNotExists(command, schema string) string {
@@ -348,23 +375,25 @@ func (d PostgresDialect) IfIndexExists(table, index, schema string) string {
 		    and a.attrelid = t.oid
 		    and a.attnum = ANY(ix.indkey)
 		    and t.relkind = 'r'
-		    and t.relname = '` + strings.ToLower(table) + `'
-			and i.relname = '` + strings.ToLower(index) + `'`
+		    and t.relname = ` + d.QuoteString(table) + `
+			and i.relname = ` + d.QuoteString(d.BuildIndexName(table, index))
 
 	if schema != "" {
-		sql = sql + " and n.nspname = '" + strings.ToLower(schema) + "'"
+		sql = sql + `
+		    and n.nspname = ` + d.QuoteString(schema)
 	}
-	sql = sql + ` and n.oid = t.relnamespace
+	sql = sql +
+		`
+		and n.oid = t.relnamespace
 		order by
 		    t.relname,
-		    i.relname;`
+		    i.relname` + d.QuerySuffix()
 
 	return sql
 }
 
 func (d PostgresDialect) DropIndex(table *TableMap, index string) string {
-
-	sql := "drop index " + d.QuotedIndex(table.SchemaName, index)
+	sql := "drop index " + d.QuoteField(d.BuildIndexName(table.TableName, index))
 	return sql
 }
 
@@ -490,12 +519,12 @@ func (d MySQLDialect) QuotedTableForQuery(schema string, table string) string {
 	return schema + "." + d.QuoteField(table)
 }
 
-func (d MySQLDialect) QuotedIndex(schema string, index string) string {
-	if strings.TrimSpace(schema) == "" {
+func (d MySQLDialect) QuotedIndex(table string, index string) string {
+	if strings.TrimSpace(table) == "" {
 		return d.QuoteField(index)
 	}
 
-	return schema + "." + d.QuoteField(index)
+	return d.QuoteField(table) + "." + d.QuoteField(index)
 }
 
 func (d MySQLDialect) IfSchemaNotExists(command, schema string) string {
@@ -524,9 +553,16 @@ func (d MySQLDialect) IfIndexExists(table, index, schema string) string {
 }
 
 func (d MySQLDialect) DropIndex(table *TableMap, index string) string {
-
-	sql := "drop index " + index + " " + d.QuotedIndex(table.SchemaName, index)
+	sql := "drop index " + d.QuotedIndex(table.SchemaName, index)
 	return sql
+}
+
+// Handles building up of a schema.database string that is compatible with
+// the given dialect
+// table - The table that <index> is created on
+// index - The index name
+func (d MySQLDialect) BuildIndexName(table string, index string) string {
+	return index
 }
 
 ///////////////////////////////////////////////////////
@@ -633,6 +669,14 @@ func (d SqlServerDialect) QuotedTableForQuery(schema string, table string) strin
 	return schema + "." + table
 }
 
+func (d SqlServerDialect) QuotedIndex(table string, index string) string {
+	if strings.TrimSpace(table) == "" {
+		return d.QuoteField(index)
+	}
+
+	return strings.ToLower(table + "." + d.QuoteField(index))
+}
+
 func (d SqlServerDialect) QuerySuffix() string { return ";" }
 
 func (d SqlServerDialect) IfSchemaNotExists(command, schema string) string {
@@ -656,6 +700,20 @@ func (d SqlServerDialect) IfTableNotExists(command, schema, table string) string
 	}
 	s := fmt.Sprintf("if not exists (select * from information_schema.tables where %stable_name = '%s') %s", schema_clause, table, command)
 	return s
+}
+
+func (d SqlServerDialect) IfIndexExists(table, index, schema string) string {
+	panic("IfIndexExists not implemented for SqlServerDialect")
+	return "Not Implemented"
+}
+
+func (d SqlServerDialect) DropIndex(table *TableMap, index string) string {
+	sql := "drop index " + d.QuotedIndex(table.SchemaName, index)
+	return sql
+}
+
+func (d SqlServerDialect) BuildIndexName(table string, index string) string {
+	return index
 }
 
 ///////////////////////////////////////////////////////
@@ -767,6 +825,14 @@ func (d OracleDialect) QuotedTableForQuery(schema string, table string) string {
 	return schema + "." + d.QuoteField(table)
 }
 
+func (d OracleDialect) QuotedIndex(table string, index string) string {
+	if strings.TrimSpace(table) == "" {
+		return d.QuoteField(index)
+	}
+
+	return table + "." + d.QuoteField(index)
+}
+
 func (d OracleDialect) IfSchemaNotExists(command, schema string) string {
 	return fmt.Sprintf("%s if not exists", command)
 }
@@ -777,4 +843,18 @@ func (d OracleDialect) IfTableExists(command, schema, table string) string {
 
 func (d OracleDialect) IfTableNotExists(command, schema, table string) string {
 	return fmt.Sprintf("%s if not exists", command)
+}
+
+func (d OracleDialect) IfIndexExists(table, index, schema string) string {
+	panic("IfIndexExists not implemented for OracleDialect")
+	return "Not Implemented"
+}
+
+func (d OracleDialect) DropIndex(table *TableMap, index string) string {
+	sql := "drop index " + d.QuotedIndex(table.SchemaName, index)
+	return sql
+}
+
+func (d OracleDialect) BuildIndexName(table string, index string) string {
+	return index
 }

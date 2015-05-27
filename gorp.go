@@ -787,10 +787,10 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 			}
 		} else {
 
-			columnName, maxColumnSize, isNotNull, isUnique, isAutoIncr, isPk := m.ParseTag(f.Tag)
+			pt := m.ParseTag(f.Tag)
 
-			if columnName == "" {
-				columnName = strings.Trim(strings.Split(f.Name, ",")[0], " ")
+			if pt.ColumnName == "" {
+				pt.ColumnName = strings.Trim(strings.Split(f.Name, ",")[0], " ")
 			}
 
 			gotype := f.Type
@@ -807,15 +807,15 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 			}
 
 			cm := &ColumnMap{
-				ColumnName: columnName,
-				Transient:  columnName == "-",
+				ColumnName: pt.ColumnName,
+				Transient:  pt.ColumnName == "-",
 				fieldName:  f.Name,
 				gotype:     gotype,
-				MaxSize:    maxColumnSize,
-				isNotNull:  isNotNull,
-				Unique:     isUnique,
-				isPK:       isPk,
-				isAutoIncr: isAutoIncr,
+				MaxSize:    pt.MaxColumnSize,
+				isNotNull:  pt.IsNotNull,
+				Unique:     pt.IsFieldUnique,
+				isPK:       pt.IsPk,
+				isAutoIncr: pt.IsAutoIncr,
 			}
 			// Check for nested fields of the same field name and
 			// override them.
@@ -829,12 +829,14 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 			}
 			if shouldAppend {
 				cols = append(cols, cm)
-				tag := f.Tag.Get("db")
-				tm.Indexes = m.addIndexForColumn(cm, tag, tm.Indexes)
-				if isPk {
+
+				// Collect info for Index creation
+				tm.Indexes = m.addIndexForColumn(cm, f.Tag, tm.Indexes)
+
+				if pt.IsPk {
 					colmap := &ColumnMap{ColumnName: cm.ColumnName, fieldName: cm.fieldName}
-					colmap.isPK = isPk
-					colmap.isAutoIncr = isAutoIncr
+					colmap.isPK = pt.IsPk
+					colmap.isAutoIncr = pt.IsAutoIncr
 					tm.keys = append(tm.keys, colmap)
 				}
 
@@ -855,48 +857,57 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 //	User     string `db:"index:idx_user, othertag:tagid1"`
 //	Err      error `db:"-"` // ignore this field when storing with gorp or gorm
 // }
-func (m *DbMap) addIndexForColumn(cm *ColumnMap, ts string, indexes []*IndexMap) []*IndexMap {
+func (m *DbMap) addIndexForColumn(cm *ColumnMap, tag reflect.StructTag, indexes []*IndexMap) []*IndexMap {
 	var shouldAppend bool
 
-	if ts != "" {
+	pt := m.ParseTag(tag)
 
-		var indexName string
-		var im *IndexMap
+	if pt.IndexName == "" {
+		// No index tag found, early return
+		return indexes
+	}
 
-		// Get all params from tagstring
-		tags := strings.Split(ts, ",")
-		for _, tag := range tags {
-			tag = strings.Trim(tag, " ")
-			o := strings.Split(tag, ":")
-			if o[0] == "index" {
-				indexName = o[1]
-				if indexName == "" {
-					// Index name not set, create one from the fieldname
-					indexName = "IX_GORP_AUTOINDEX_" + strings.ToUpper(cm.fieldName)
-				}
-				shouldAppend = true
+	var im *IndexMap
 
-				// Check if indexName already exists in array of IndexMaps
-				for _, im = range indexes {
-					if im.IndexName == indexName {
-						im.fieldNames = append(im.fieldNames, cm.fieldName)
-						shouldAppend = false
+	// Get all params from tagstring
+	if pt.IndexName == "autogenerateindexname" {
+		// Index name not set, create one from the fieldname
+		pt.IndexName = "IX_GORP_AUTOINDEX_" + strings.ToUpper(cm.fieldName)
+	}
+	shouldAppend = true
 
-						break
-					}
-				}
-				// Index not found, append it to array of IndexMaps
-				if shouldAppend {
+	fn := cm.ColumnName
+	if fn == "" {
+		fn = cm.fieldName
+	}
+	if fn == "" {
+		// Unknown fieldname
+		panic("func addIndexForColumn: No columnname found for index " + pt.IndexName)
+		return indexes
+	}
 
-					im = &IndexMap{
-						IndexName:  indexName,
-						fieldNames: []string{cm.fieldName},
-					}
-					indexes = append(indexes, im)
-				}
-
-			}
+	// Check if indexName already exists in array of IndexMaps
+	for _, im = range indexes {
+		if im.IndexName == pt.IndexName {
+			im.fieldNames = append(im.fieldNames, fn)
+			shouldAppend = false
+			break
 		}
+	}
+
+	if m.DebugLevel > 2 {
+		fmt.Println("addIndexForColumn: cm.fieldName: " + cm.fieldName)
+		fmt.Println("addIndexForColumn: cm.ColumnName: " + cm.ColumnName)
+	}
+
+	// Index not found, append it to array of IndexMaps
+	if shouldAppend {
+
+		im = &IndexMap{
+			IndexName:  pt.IndexName,
+			fieldNames: []string{fn},
+		}
+		indexes = append(indexes, im)
 	}
 
 	return indexes
@@ -996,7 +1007,7 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 		s.WriteString(m.Dialect.QuerySuffix())
 
 		// DEBUG
-		if m.DebugLevel > 2 {
+		if m.DebugLevel > 3 {
 			println("Create tables SQL: " + s.String())
 		}
 		_, err = m.Exec(s.String())
@@ -1005,17 +1016,31 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 		}
 	}
 
-	if err == nil {
-		err = m.createIndexes(ifNotExists)
-	}
-
 	return err
 }
 
 // Creates indexes from a list of IndexMaps in the TableMap
+// If the index already exists it is checked if the index in the database has all
+// the same fields as in the TableMap
+func (m *DbMap) CreateIndexes() error {
+	return m.createIndexes(false)
+}
+
+// Creates indexes from a list of IndexMaps in the TableMap
+// If the index already exists nothing is done, that means no checking is done
+// if the index is correct. This is the suggested method for production databases,
+// as index creation can have a heavy performance impact and you dont want to
+// have a drop and recreate index unexpectedly on a large table.
+func (m *DbMap) CreateIndexesIfNotExists() error {
+	return m.createIndexes(true)
+}
+
+// Creates indexes from a list of IndexMaps in the TableMap
+// if ifNotExists == false a checking is done if all fields of the IndexMap
+// match with the database index
 func (m *DbMap) createIndexes(ifNotExists bool) error {
 	var err error
-	indexCreate := "create index"
+	indexCreate := "create index "
 
 	for _, table := range m.tables {
 		for _, index := range table.Indexes {
@@ -1031,10 +1056,14 @@ func (m *DbMap) createIndexes(ifNotExists bool) error {
 				if matches {
 					return err
 				} else {
-					_, err = m.Exec(m.Dialect.DropIndex(table, index.IndexName))
-					if err != nil {
-						err = errors.New("drop index failed on index " + index.IndexName)
-						break
+					if ifNotExists {
+						return err
+					} else {
+						_, err = m.Exec(m.Dialect.DropIndex(table, index.IndexName))
+						if err != nil {
+							err = errors.New("drop index failed on index " + index.IndexName)
+							break
+						}
 					}
 				}
 			}
@@ -1042,8 +1071,7 @@ func (m *DbMap) createIndexes(ifNotExists bool) error {
 			s := bytes.Buffer{}
 
 			s.WriteString(indexCreate)
-			s.WriteString(fmt.Sprintf(" %s ", m.Dialect.QuotedIndex("", index.IndexName)))
-
+			s.WriteString(strings.Trim(fmt.Sprintf(" %s ", m.Dialect.BuildIndexName(table.TableName, index.IndexName)), " "))
 			s.WriteString(fmt.Sprintf(" on %s (", m.Dialect.QuotedTableForQuery(table.SchemaName, table.TableName)))
 
 			sep := ""
@@ -1052,12 +1080,6 @@ func (m *DbMap) createIndexes(ifNotExists bool) error {
 				sep = ","
 			}
 			s.WriteString(")")
-			// DEBUG
-			fmt.Println("\nCreate INDEX")
-			fmt.Println("\nCreate INDEX")
-			fmt.Println("\nCreate INDEX")
-			fmt.Println("\nCreate INDEX")
-			fmt.Println(s.String())
 			_, err = m.Exec(s.String())
 			if err != nil {
 				err = errors.New("Create index " + index.IndexName + " failed: " + err.Error())
@@ -1078,7 +1100,8 @@ func (m *DbMap) checkIfIndexMatches(table *TableMap, index *IndexMap) (exists bo
 
 	sql := m.Dialect.IfIndexExists(table.TableName, index.IndexName, table.SchemaName)
 
-	rows, err = m.Db.Query(sql)
+	rows, err = m.query(sql)
+	//rows, err = m.Db.Query(sql)
 	if err != nil {
 		err = errors.New("Getting index info failed: SQL: " + sql + " Error: " + err.Error())
 		return
@@ -1086,7 +1109,7 @@ func (m *DbMap) checkIfIndexMatches(table *TableMap, index *IndexMap) (exists bo
 	defer rows.Close()
 
 	// DEBUG
-	if m.DebugLevel > 2 {
+	if m.DebugLevel > 3 {
 		fmt.Println("GET INDEX INFO")
 		fmt.Println(sql)
 	}
@@ -1453,43 +1476,94 @@ func argsString(args ...interface{}) string {
 
 ///////////////
 
+type GorpParsedTag struct {
+	ColumnName    string
+	IsFieldUnique bool
+	IndexName     string
+	IsIndexUnique bool
+	MaxColumnSize int
+	IsNotNull     bool
+	IsAutoIncr    bool
+	IsPk          bool
+}
+
 // ParseTag extracts all field tags from input param tag and resturns all found options
-func (m *DbMap) ParseTag(tag reflect.StructTag) (columnName string,
-	maxColumnSize int, isNotNull bool, isUnique bool, isAutoIncr bool, isPk bool) {
+/* Example:
+type Post struct {
+	Id           uint64    `db:"notnull, PID, primarykey, autoincrement"`
+	SecondTestID int       `db:"notnull, name: SID, uniqueindex:idx_unique_sid"`
+	Created      time.Time `db:"notnull, primarykey"`
+	PostDate     time.Time `db:"notnull"`
+	Site         string    `db:"name: PostSite, notnull, size:50, index:idx_site"`
+	PostId       string    `db:"notnull, size:32, unique"`
+	Score        int       `db:"notnull"`
+	Title        string    `db:"notnull"`
+	Url          string    `db:"notnull"`
+	User         string    `db:"index:idx_user, size:64"`
+	PostSub      string    `db:"index:idx_user, size:128"`
+	UserIP       string    `db:"notnull, size:16"`
+	BodyType     string    `db:"notnull, size:64"`
+	Body         string    `db:"name:PostBody, size:16384"`
+	Err          error     `db:"-"` // ignore this field when storing with gorp
+}
+*/
+func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
+
+	//(columnName string, indexName string,
+	//	maxColumnSize int, isNotNull bool, isFieldUnique bool, isAutoIncr bool, isPk bool) {
 
 	ts := tag.Get("gorp")
 	if ts == "" {
 		ts = tag.Get("db")
 	}
+	if ts == "" {
+		// not tags found, exit early
+		return
+	}
+
+	// Create the return struct
+	//pt = new(GorpParsedTag)
 
 	if ts == "-" {
 		// Ignore this column
-		columnName = "-"
+		pt.ColumnName = "-"
 	} else {
 
 		// Get all params from tagstring
 		tags := strings.Split(ts, ",")
 		for _, tag := range tags {
 			o := strings.Split(tag, ":")
-			o[0] = strings.Trim(o[0], " ")
+			o[0] = strings.ToLower(strings.Trim(o[0], " "))
 			switch o[0] {
 			case "name":
-				columnName = strings.Trim(o[1], " ")
+				pt.ColumnName = strings.Trim(o[1], " ")
+			case "index":
+				pt.IndexName = strings.Trim(o[1], " ")
+				if pt.IndexName == "" {
+					pt.IndexName = "autogenerateindexname"
+				}
+				pt.IsIndexUnique = false
+			case "uniqueindex":
+				pt.IndexName = strings.Trim(o[1], " ")
+				if pt.IndexName == "" {
+					pt.IndexName = "autogenerateindexname"
+				}
+				pt.IsIndexUnique = true
 			case "size":
-				maxColumnSize, _ = strconv.Atoi(o[1])
+				pt.MaxColumnSize, _ = strconv.Atoi(o[1])
 			case "notnull":
-				isNotNull = true
+				pt.IsNotNull = true
 			case "unique":
-				isUnique = true
+				pt.IsFieldUnique = true
 			case "autoincrement":
-				isAutoIncr = true
+				pt.IsAutoIncr = true
 			case "primarykey":
-				isPk = true
+				pt.IsPk = true
 
 			default:
 				// Fallback to traditional gorp tags - use it as fieldname if its nether of one of the tags above
 				if len(o) == 1 {
-					columnName = o[0]
+					pt.ColumnName = o[0]
 				}
 			}
 		}
@@ -2094,21 +2168,20 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 		field, found := t.FieldByNameFunc(func(fieldName string) bool {
 			field, _ := t.FieldByName(fieldName)
 
-			fieldName, _, _, _, _, _ = m.ParseTag(field.Tag)
-
-			if fieldName == "-" {
+			pt := m.ParseTag(field.Tag)
+			if pt.ColumnName == "-" {
 				return false
-			} else if fieldName == "" {
-				fieldName = field.Name
+			} else if pt.ColumnName == "" {
+				pt.ColumnName = field.Name
 			}
 			if tableMapped {
-				colMap := colMapOrNil(table, fieldName)
+				colMap := colMapOrNil(table, pt.ColumnName)
 				if colMap != nil {
-					fieldName = colMap.ColumnName
+					pt.ColumnName = colMap.ColumnName
 				}
 			}
 
-			return colName == strings.ToLower(fieldName)
+			return colName == strings.ToLower(pt.ColumnName)
 		})
 		if found {
 			colToFieldIndex[x] = field.Index
@@ -2117,7 +2190,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 			missingColNames = append(missingColNames, colName)
 		}
 
-		if m.DebugLevel > 2 {
+		if m.DebugLevel > 3 {
 			// DEBUG
 			fmt.Printf("colToFieldIndex[x]: %v\n ", colToFieldIndex[x])
 			fmt.Println("columnToFieldIndex colName: " + colName)
