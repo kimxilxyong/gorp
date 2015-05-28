@@ -375,8 +375,9 @@ func (d PostgresDialect) IfIndexExists(table, index, schema string) string {
 		    and a.attrelid = t.oid
 		    and a.attnum = ANY(ix.indkey)
 		    and t.relkind = 'r'
-		    and t.relname = ` + d.QuoteString(table) + `
-			and i.relname = ` + d.QuoteString(d.BuildIndexName(table, index))
+		    and t.relname = ` + d.QuoteString(table) +
+		`
+		    and i.relname = ` + d.QuoteString(d.BuildIndexName(table, index))
 
 	if schema != "" {
 		sql = sql + `
@@ -384,7 +385,7 @@ func (d PostgresDialect) IfIndexExists(table, index, schema string) string {
 	}
 	sql = sql +
 		`
-		and n.oid = t.relnamespace
+		    and n.oid = t.relnamespace
 		order by
 		    t.relname,
 		    i.relname` + d.QuerySuffix()
