@@ -11,12 +11,12 @@ go get github.com/kimxilxyong/gorp
 
 
 Features: 
-Automatic index generation from field tags
-Multifield indexes
-Detection of index changes
-Extended tag syntax: name, index, notnull, primarykey, autoincrement, size
-Optional tag anchor: "gorp" instead of "db"
-Backward compatibility, does not break current code which uses standard gorp
+* Automatic index generation from field tags
+* Multifield indexes
+* Detection of index changes
+* Extended tag syntax: name, index, notnull, primarykey, autoincrement, size
+* Optional tag anchor: "gorp" instead of "db"
+* Backward compatibility, does not break current code which uses standard gorp
 
 ```
 Example:
