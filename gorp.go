@@ -807,30 +807,12 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				}
 			}
 		} else {
-<<<<<<< HEAD
 
 			pt := m.ParseTag(f.Tag)
 
 			if pt.ColumnName == "" {
 				pt.ColumnName = strings.Trim(strings.Split(f.Name, ",")[0], " ")
-=======
-			// Tag = Name { ','  Option }
-			// Option = OptionKey [ ':' OptionValue ]
-			cArguments := strings.Split(f.Tag.Get("db"), ",")
-			columnName := cArguments[0]
-			var maxSize int
-			for _, argString := range cArguments[1:] {
-				arg := strings.SplitN(argString, ":", 2)
-				switch arg[0] {
-				case "size":
-					maxSize, _ = strconv.Atoi(arg[1])
-				default:
-					panic(fmt.Sprintf("Unrecognized tag argument for field %v: %v", f.Name, arg))
-				}
-			}
-			if columnName == "" {
-				columnName = f.Name
->>>>>>> upstream/master
+
 			}
 
 			gotype := f.Type
@@ -862,15 +844,12 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				Transient:  pt.ColumnName == "-",
 				fieldName:  f.Name,
 				gotype:     gotype,
-<<<<<<< HEAD
 				MaxSize:    pt.MaxColumnSize,
 				isNotNull:  pt.IsNotNull,
 				Unique:     pt.IsFieldUnique,
 				isPK:       pt.IsPk,
 				isAutoIncr: pt.IsAutoIncr,
-=======
-				MaxSize:    maxSize,
->>>>>>> upstream/master
+
 			}
 			// Check for nested fields of the same field name and
 			// override them.

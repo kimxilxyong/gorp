@@ -1,4 +1,4 @@
-Gorp with Indexes
+# Gorp with Indexes
 
 This is a fork of http://github.com/go-gorp/gorp
 The purpose of this fork is to implement automatic index generation from tags or from go code
@@ -45,6 +45,9 @@ type Post struct {
 	Err          error     `db:"-"` // ignore this field when storing with gorp
 }
 ```
+
+# Go Relational Persistence
+## Original Readme from http://github.com/go-gorp/gorp
 
 The "M" is alive and well.  Given some Go structs and a database, gorp
 should remove a fair amount of boilerplate busy-work from your code.
