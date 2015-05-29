@@ -1,19 +1,19 @@
-gorp with indexes
+Gorp with Indexes
 
 This is a fork of http://github.com/go-gorp/gorp
 The purpose of this fork is to implement automatic index generation from tags or from go code
 
 How to get it:
-
 ```
 go get github.com/kimxilxyong/gorp
 ```
 
-How to use it example code for gorp with indexes:
+How to use it, example code for gorp with indexes:
 ```
 github.com\kimxilxyong\intogooglego\redditFetchGorp
 ```
 
+Tested with MySQL and PostgreSQL. Other databases are not supported currently.
 
 
 Features: 
