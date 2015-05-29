@@ -5,9 +5,13 @@ echo http://github.com/kimxilxyong/gorp
 
 set GORP_TEST_DSN=gorptest:gorptest@/gorptest?parseTime=true
 set GORP_TEST_DIALECT=gomysql
+echo Running tests for %GORP_TEST_DIALECT%
+
 go test .
 
 set GORP_TEST_DSN=user=gorptest password=gorptest dbname=gorptest sslmode=disable
 set GORP_TEST_DIALECT=postgres
+echo Running tests for %GORP_TEST_DIALECT%
+
 go test .
 
