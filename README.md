@@ -5,13 +5,15 @@ The purpose of this fork is to implement automatic index generation from tags or
 
 How to get it:
 
+```
+go get github.com/kimxilxyong/gorp
+```
+
 How to use it example code for gorp with indexes:
 ```
 github.com\kimxilxyong\intogooglego\redditFetchGorp
 ```
-```
-go get github.com/kimxilxyong/gorp
-```
+
 
 
 Features: 
