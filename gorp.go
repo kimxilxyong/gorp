@@ -281,7 +281,10 @@ func (t *TableMap) ColMap(field string) *ColumnMap {
 func colMapOrNil(t *TableMap, field string) *ColumnMap {
 	for _, col := range t.Columns {
 		if strings.ToLower(col.fieldName) == strings.ToLower(field) || strings.ToLower(col.ColumnName) == strings.ToLower(field) {
-			return col
+			// Ignore ignored Columns, "-" is the indentifier for columns which should be ignored
+			if col.ColumnName != "-" {
+				return col
+			}
 		}
 	}
 	return nil
@@ -759,7 +762,7 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 	tmap.Columns = m.readStructColumns(t, tmap)
 
 	m.tables = append(m.tables, tmap)
-	if m.DebugLevel > 2 {
+	if m.DebugLevel > 3 {
 		for i, testim := range tmap.Indexes {
 			fmt.Printf("tm.Indexes %d: indexname %s\n", i, testim.IndexName)
 			for x, testfn := range testim.fieldNames {
@@ -1028,10 +1031,6 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 		s.WriteString(m.Dialect.CreateTableSuffix())
 		s.WriteString(m.Dialect.QuerySuffix())
 
-		// DEBUG
-		if m.DebugLevel > 3 {
-			println("Create tables SQL: " + s.String())
-		}
 		_, err = m.Exec(s.String())
 		if err != nil {
 			break
@@ -1076,7 +1075,7 @@ func (m *DbMap) createIndexes(ifNotExists bool) error {
 			}
 
 			// DEBUG
-			if m.DebugLevel > 2 {
+			if m.DebugLevel > 3 {
 				fmt.Printf("Index: %s, on table %s, exists %t, matches: %t\n", index.IndexName, table.TableName, exists, matches)
 			}
 
@@ -2188,8 +2187,18 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 
 		field, found := t.FieldByNameFunc(func(fieldName string) bool {
 			field, _ := t.FieldByName(fieldName)
-
 			pt := m.ParseTag(field.Tag)
+
+			if m.DebugLevel > 3 {
+				// DEBUG
+				fmt.Printf("t Reflect LOOKING FOR: %s\n", colName)
+				fmt.Printf("t Reflect name: %s\n", field.Name)
+				fmt.Printf("t Reflect PkgPath: %s\n", field.PkgPath)
+				fmt.Printf("t Reflect Tag: %s\n", field.Tag)
+				fmt.Printf("t Reflect pt.ColumnName: %s\n", pt.ColumnName)
+				fmt.Println("-----XXXXXXXXXXXXXXXXXX-----------")
+			}
+
 			if pt.ColumnName == "-" {
 				return false
 			} else if pt.ColumnName == "" {
@@ -2198,11 +2207,32 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 			if tableMapped {
 				colMap := colMapOrNil(table, pt.ColumnName)
 				if colMap != nil {
+
+					if m.DebugLevel > 3 {
+						// DEBUG
+						fmt.Printf("Changed ColumnName from %s to %s\n", pt.ColumnName, colMap.ColumnName)
+					}
 					pt.ColumnName = colMap.ColumnName
 				}
 			}
 
-			return colName == strings.ToLower(pt.ColumnName)
+			ColMatches := (colName == strings.ToLower(pt.ColumnName))
+
+			if m.DebugLevel > 3 {
+				// DEBUG
+				fmt.Printf("t Reflect LOOKING FOR: %s\n", colName)
+				fmt.Printf("t Reflect name: %s\n", field.Name)
+				fmt.Printf("t Reflect PkgPath: %s\n", field.PkgPath)
+				fmt.Printf("t Reflect Tag: %s\n", field.Tag)
+				fmt.Printf("t Reflect pt.ColumnName: %s\n", pt.ColumnName)
+				if ColMatches {
+					fmt.Println("--!!!! YES MATCHES !!!!-----------")
+				} else {
+					fmt.Println("----------------------------------")
+				}
+			}
+
+			return ColMatches
 		})
 		if found {
 			colToFieldIndex[x] = field.Index
@@ -2215,7 +2245,6 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 			// DEBUG
 			fmt.Printf("colToFieldIndex[x]: %v\n ", colToFieldIndex[x])
 			fmt.Println("columnToFieldIndex colName: " + colName)
-			// DEBUG
 			fmt.Println("columnToFieldIndex fieldName: " + field.Name)
 		}
 	}
