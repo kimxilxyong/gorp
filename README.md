@@ -8,14 +8,10 @@ How to get it:
 go get github.com/kimxilxyong/gorp
 ```
 
-How to use it, example code for gorp with indexes:
+How to use it, example code for Gorp with Indexes:
 ```
 github.com\kimxilxyong\intogooglego\redditFetchGorp
 ```
-
-Tested with MySQL and PostgreSQL. Other databases are not supported currently.
-
-
 Features: 
 * Automatic index generation from field tags
 * Multifield indexes
@@ -45,6 +41,14 @@ type Post struct {
 	Err          error     `db:"-"` // ignore this field when storing with gorp
 }
 ```
+
+If you want to run the unit tests:
+```
+github.com\kimxilxyong\gorp> test_all.bat
+```
+
+Tested with MySQL and PostgreSQL. Other databases are not supported currently.
+
 
 # Go Relational Persistence
 ## Original Readme from http://github.com/go-gorp/gorp

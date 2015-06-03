@@ -807,7 +807,7 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				}
 			}
 		} else {
-
+			// Parse all field tags into a GorpParsedTag
 			pt := m.ParseTag(f.Tag)
 
 			if pt.ColumnName == "" {
@@ -849,7 +849,6 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				Unique:     pt.IsFieldUnique,
 				isPK:       pt.IsPk,
 				isAutoIncr: pt.IsAutoIncr,
-
 			}
 			// Check for nested fields of the same field name and
 			// override them.
@@ -899,6 +898,7 @@ func (m *DbMap) addIndexForColumn(cm *ColumnMap, tag reflect.StructTag, tm Table
 	var indexes []*IndexMap
 	indexes = tm.Indexes
 
+	// Parse all field tags into a GorpParsedTag
 	pt := m.ParseTag(tag)
 
 	if pt.IndexName == "" {
@@ -1417,7 +1417,7 @@ func (m *DbMap) Begin() (*Transaction, error) {
 func (m *DbMap) TableFor(t reflect.Type, checkPK bool) (*TableMap, error) {
 	table := tableOrNil(m, t)
 	if table == nil {
-		return nil, errors.New(fmt.Sprintf("No table found for type: %v", t.Name()))
+		return nil, errors.New(fmt.Sprintf("No table found for type: %v", t))
 	}
 
 	if checkPK && len(table.keys) < 1 {
@@ -2207,6 +2207,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 
 		field, found := t.FieldByNameFunc(func(fieldName string) bool {
 			field, _ := t.FieldByName(fieldName)
+			// Parse all field tags into a GorpParsedTag
 			pt := m.ParseTag(field.Tag)
 
 			if m.DebugLevel > 3 {
