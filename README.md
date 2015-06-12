@@ -1,5 +1,7 @@
 # Gorp with Indexes
 
+It is currently unstable - do not checkout
+
 This is a fork of http://github.com/go-gorp/gorp
 The purpose of this fork is to implement automatic index generation from tags or from go code
 
