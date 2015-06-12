@@ -6,9 +6,19 @@
 // SQL databases.  It uses the database/sql package, and should work with any
 // compliant database/sql driver.
 //
+// Gorp with Indexes, a fork of gorp by Kim Il
+// Source code and project home:
+// https://github.com/kimxilxyong/gorp
+//
+// Original:
 // Source code and project home:
 // https://github.com/go-gorp/gorp
 //
+// History:
+// 2015.05.16 Forked and initial index support
+// 2015.05.25 Added named parameter support for the new field tags
+// 2015.05.29 Added support for PostgreSQL
+
 package gorp
 
 import (
@@ -201,7 +211,8 @@ type TableMap struct {
 	SchemaName     string
 	gotype         reflect.Type
 	Columns        []*ColumnMap
-	Indexes        []*IndexMap
+	Indexes        []*IndexMap    // list of indexes for this table
+	Relations      []*RelationMap // list of detail/child tables for this table
 	keys           []*ColumnMap
 	uniqueTogether [][]string
 	version        *ColumnMap
@@ -210,6 +221,35 @@ type TableMap struct {
 	deletePlan     bindPlan
 	getPlan        bindPlan
 	dbmap          *DbMap
+}
+
+func (t TableMap) String() string {
+	var s string
+	s = "TableName: " + t.TableName + "\n"
+	s = s + "Type: " + t.gotype.Name() + "\n"
+	for _, c := range t.Columns {
+		s = s + "Column: " + c.ColumnName + "\n"
+	}
+	return s
+}
+
+// RelationMap represents a mapping between a master table and a detail table
+// Use tablemap.AddRelation() or field tag `db:"relation:<foreignkey field in detail table>"`to create these
+// Example:	Comments  []*Comment `db:"relation:PostId"`
+type RelationMap struct {
+	DetailTable         TableMap
+	ForeignKeyFieldName string
+	DetailTableType     interface{}
+	MasterFieldName     string
+}
+
+func (r RelationMap) String() string {
+	var s string
+	s = "TableMap: " + r.DetailTable.String() + "\n"
+	s = s + "ForeignKeyFieldName: " + r.ForeignKeyFieldName + "\n"
+	s = s + "DetailTableType: " + reflect.TypeOf(r.DetailTableType).Name() + "\n"
+	s = s + "MasterFieldName: " + r.MasterFieldName
+	return s
 }
 
 // ResetSql removes cached insert/update/select/delete SQL strings
@@ -290,7 +330,8 @@ func colMapOrNil(t *TableMap, field string) *ColumnMap {
 	for _, col := range t.Columns {
 		if strings.ToLower(col.fieldName) == strings.ToLower(field) || strings.ToLower(col.ColumnName) == strings.ToLower(field) {
 			// Ignore ignored Columns, "-" is the indentifier for columns which should be ignored
-			if col.ColumnName != "-" {
+			//if col.ColumnName != "-" { // old code, depending on a hardcoded string is avoided now
+			if col.Transient == false {
 				return col
 			}
 		}
@@ -759,10 +800,17 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 	// if so, update the name and return the existing pointer
 	for i := range m.tables {
 		table := m.tables[i]
+		if m.DebugLevel > 2 {
+			fmt.Printf("*** AddTable table.gotype %v\n", table.gotype)
+		}
 		if table.gotype == t {
 			table.TableName = name
 			return table
 		}
+	}
+
+	if m.DebugLevel > 2 {
+		fmt.Printf("*** AddTable type %v\n", t)
 	}
 
 	tmap := &TableMap{gotype: t, TableName: name, SchemaName: schema, dbmap: m}
@@ -812,7 +860,69 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 
 			if pt.ColumnName == "" {
 				pt.ColumnName = strings.Trim(strings.Split(f.Name, ",")[0], " ")
+			}
 
+			// Is this field is marked as a relation to a child/detail struct/table?
+			if pt.ForeignKey != "" {
+
+				//if m.DebugLevel > 2 {
+				subField := f.Type.Elem()
+				if subField.Kind() == reflect.Ptr {
+					subField = subField.Elem()
+				}
+
+				masterFieldName := f.Name
+
+				if m.DebugLevel > 2 {
+					fmt.Printf("RELATION %v:\n", f)
+					fmt.Printf("RELATION MasterField %v:\n", masterFieldName)
+					fmt.Printf("RELATION Type %v:\n", f.Type)
+					fmt.Printf("RELATION Type Elem %v:\n", subField)
+				}
+				vi := reflect.New(subField).Interface()
+
+				subFieldValue := reflect.New(subField)
+
+				if m.DebugLevel > 2 {
+					fmt.Printf("RELATION Value Elem %v:\n", subFieldValue)
+					fmt.Printf("RELATION subFieldValue.Kind Before %v:\n", subFieldValue.Kind())
+				}
+
+				if subFieldValue.Kind() == reflect.Ptr {
+					subFieldValue = reflect.Indirect(subFieldValue)
+				}
+
+				if m.DebugLevel > 2 {
+					fmt.Printf("RELATION subFieldValue.Kind After %v:\n", subFieldValue.Kind())
+					fmt.Printf("RELATION Value Elem %v:\n", subFieldValue)
+				}
+
+				//ind := reflect.Indirect(subFieldValue).Interface()
+				subFieldValueInterface := subFieldValue.Interface()
+
+				if m.DebugLevel > 2 {
+					fmt.Printf("**** RELATION TypeOf vi %v:\n", reflect.TypeOf(vi))
+					fmt.Printf("**** RELATION TypeOf sub %v:\n", reflect.TypeOf(subFieldValueInterface))
+				}
+
+				fmt.Printf("RELATION Interface %v:\n", subFieldValueInterface)
+				rtm := m.AddTable(subFieldValueInterface)
+				fmt.Printf("After AddTable %v:\n", rtm)
+
+				r := RelationMap{*rtm, pt.ForeignKey, subFieldValueInterface, subField.Name()}
+
+				//gtm, _, _ := m.tableForPointer(reflect.ValueOf(f.Type), false)
+				tm.Relations = append(tm.Relations, &r)
+
+				if m.DebugLevel > 2 {
+
+					//fmt.Printf("RELATION Type %v:\n", f.Type)
+					fmt.Printf("RELATION Table %v:\n", rtm)
+					fmt.Print("RELATION: %v\n", tm.Relations)
+
+					//fmt.Print("RELATION gtm: %v\n", gtm)
+
+				}
 			}
 
 			gotype := f.Type
@@ -841,7 +951,7 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 
 			cm := &ColumnMap{
 				ColumnName: pt.ColumnName,
-				Transient:  pt.ColumnName == "-",
+				Transient:  pt.Transient,
 				fieldName:  f.Name,
 				gotype:     gotype,
 				MaxSize:    pt.MaxColumnSize,
@@ -1081,7 +1191,6 @@ func (m *DbMap) CreateIndexesIfNotExists() error {
 // match with the database index
 func (m *DbMap) createIndexes(ifNotExists bool) error {
 	var err error
-	indexCreate := "create index "
 
 	for _, table := range m.tables {
 		for _, index := range table.Indexes {
@@ -1115,8 +1224,15 @@ func (m *DbMap) createIndexes(ifNotExists bool) error {
 				}
 			}
 
-			s := bytes.Buffer{}
+			// Build the create index sql string
+			var indexCreate string
+			if index.Unique {
+				indexCreate = "create unique index "
+			} else {
+				indexCreate = "create index "
+			}
 
+			s := bytes.Buffer{}
 			s.WriteString(indexCreate)
 			s.WriteString(strings.Trim(fmt.Sprintf(" %s ", m.Dialect.BuildIndexName(table.TableName, index.IndexName)), " "))
 			s.WriteString(fmt.Sprintf(" on %s (", m.Dialect.QuotedTableForQuery(table.SchemaName, table.TableName)))
@@ -1281,6 +1397,118 @@ func (m *DbMap) TruncateTables() error {
 // Panics if any interface in the list has not been registered with AddTable
 func (m *DbMap) Insert(list ...interface{}) error {
 	return insert(m, m, list...)
+}
+
+// Store checks for each element in the list if it is already present in the
+// database by checking on the primary key. If not present an SQL INSERT is done,
+// else an SQL UPDATE
+//
+// Any interface whose TableMap has an auto-increment primary key will
+// have its last insert id bound to the PK field on the struct.
+//
+// The hook functions PreInsert() and/or PostInsert() will be executed
+// before/after the INSERT statement if the interface defines them.
+//
+// The hook functions PreUpdate() and/or PostUpdate() will be executed
+// before/after the UPDATE statement if the interface defines them.
+//
+// Panics if any interface in the list has not been registered with AddTable
+func (m *DbMap) Store(list ...interface{}) error {
+	var err error
+	for _, ptr := range list {
+
+		if reflect.TypeOf(ptr).String() == "reflect.Value" {
+			fmt.Printf("Store type %s\n", reflect.TypeOf(ptr))
+			fmt.Printf("Store type2 '%s'\n", reflect.TypeOf(ptr).String())
+			fmt.Printf("Store name %v\n", reflect.TypeOf(ptr).Name())
+			err = m.InsertFromValue(m, ptr.(reflect.Value))
+			if err != nil {
+				break
+			}
+		}
+
+	}
+	return err
+}
+
+func (m *DbMap) InsertFromValue(exec SqlExecutor, value reflect.Value) error {
+
+	table, err := m.TableFor(value.Type(), true)
+	//table, elem, err := m.tableForPointer(ptr, false)
+	elem := value
+	if err != nil {
+		return err
+	}
+
+	if m.DebugLevel > 2 {
+		fmt.Printf("GORP InsertFromValue table '%s', elem %v\n", table.TableName, elem)
+	}
+
+	eval := elem.Addr().Interface()
+	if v, ok := eval.(HasPreInsert); ok {
+		err := v.PreInsert(exec)
+		if err != nil {
+			return err
+		}
+	}
+
+	bi, err := table.bindInsert(elem)
+	if err != nil {
+		return err
+	}
+
+	if bi.autoIncrIdx > -1 {
+		f := elem.FieldByName(bi.autoIncrFieldName)
+		switch inserter := m.Dialect.(type) {
+		case IntegerAutoIncrInserter:
+			id, err := inserter.InsertAutoIncr(exec, bi.query, bi.args...)
+			if err != nil {
+				return err
+			}
+			k := f.Kind()
+			if (k == reflect.Int) || (k == reflect.Int16) || (k == reflect.Int32) || (k == reflect.Int64) {
+				f.SetInt(id)
+			} else if (k == reflect.Uint) || (k == reflect.Uint16) || (k == reflect.Uint32) || (k == reflect.Uint64) {
+				f.SetUint(uint64(id))
+			} else {
+				return fmt.Errorf("gorp: Cannot set autoincrement value on non-Int field. SQL=%s  autoIncrIdx=%d autoIncrFieldName=%s", bi.query, bi.autoIncrIdx, bi.autoIncrFieldName)
+			}
+		case TargetedAutoIncrInserter:
+			err := inserter.InsertAutoIncrToTarget(exec, bi.query, f.Addr().Interface(), bi.args...)
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("gorp: Cannot use autoincrement fields on dialects that do not implement an autoincrementing interface")
+		}
+	} else {
+		_, err := exec.Exec(bi.query, bi.args...)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Insert child records if present
+	for _, r := range table.Relations {
+
+		if m.DebugLevel > 2 {
+			fmt.Printf("******GORP RELATION '%s'\n", r.String())
+		}
+
+		//err = m.Insert(r.DetailTableType)
+		//if err != nil {
+		//	return err
+		//}
+	}
+
+	if v, ok := eval.(HasPostInsert); ok {
+		err := v.PostInsert(exec)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Update runs a SQL UPDATE statement for each element in list.  List
@@ -1525,6 +1753,8 @@ type GorpParsedTag struct {
 	IsNotNull     bool
 	IsAutoIncr    bool
 	IsPk          bool
+	Transient     bool
+	ForeignKey    string
 }
 
 // ParseTag extracts all field tags from input param tag and resturns all found options
@@ -1567,6 +1797,7 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 	if ts == "-" {
 		// Ignore this column
 		pt.ColumnName = "-"
+		pt.Transient = true
 	} else {
 
 		// Get all params from tagstring
@@ -1599,9 +1830,14 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 				pt.IsAutoIncr = true
 			case "primarykey":
 				pt.IsPk = true
+			case "relation":
+				pt.Transient = true
+				pt.ForeignKey = strings.Trim(o[1], " ")
+			case "ignorefield":
+				pt.Transient = true
 
 			default:
-				// Fallback to traditional gorp tags - use it as fieldname if its nether of one of the tags above
+				// Fallback to traditional gorp tags - use it as a fieldname if it is none of the tags above
 				if len(o) == 1 {
 					pt.ColumnName = o[0]
 				}
@@ -2210,7 +2446,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 			// Parse all field tags into a GorpParsedTag
 			pt := m.ParseTag(field.Tag)
 
-			if m.DebugLevel > 3 {
+			if m.DebugLevel > 2 {
 				// DEBUG
 				fmt.Printf("t Reflect LOOKING FOR: %s\n", colName)
 				fmt.Printf("t Reflect name: %s\n", field.Name)
@@ -2220,7 +2456,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 				fmt.Println("-----XXXXXXXXXXXXXXXXXX-----------")
 			}
 
-			if pt.ColumnName == "-" {
+			if pt.Transient {
 				return false
 			} else if pt.ColumnName == "" {
 				pt.ColumnName = field.Name
@@ -2229,7 +2465,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 				colMap := colMapOrNil(table, pt.ColumnName)
 				if colMap != nil {
 
-					if m.DebugLevel > 3 {
+					if m.DebugLevel > 2 {
 						// DEBUG
 						fmt.Printf("Changed ColumnName from %s to %s\n", pt.ColumnName, colMap.ColumnName)
 					}
@@ -2239,7 +2475,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 
 			ColMatches := (colName == strings.ToLower(pt.ColumnName))
 
-			if m.DebugLevel > 3 {
+			if m.DebugLevel > 2 {
 				// DEBUG
 				fmt.Printf("t Reflect LOOKING FOR: %s\n", colName)
 				fmt.Printf("t Reflect name: %s\n", field.Name)
@@ -2262,7 +2498,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 			missingColNames = append(missingColNames, colName)
 		}
 
-		if m.DebugLevel > 3 {
+		if m.DebugLevel > 2 {
 			// DEBUG
 			fmt.Printf("colToFieldIndex[x]: %v\n ", colToFieldIndex[x])
 			fmt.Println("columnToFieldIndex colName: " + colName)
@@ -2499,6 +2735,10 @@ func insert(m *DbMap, exec SqlExecutor, list ...interface{}) error {
 		table, elem, err := m.tableForPointer(ptr, false)
 		if err != nil {
 			return err
+		}
+
+		if m.DebugLevel > 2 {
+			fmt.Printf("GORP insert table '%s', elem %v\n", table.TableName, elem)
 		}
 
 		eval := elem.Addr().Interface()
