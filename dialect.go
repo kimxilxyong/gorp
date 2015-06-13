@@ -94,8 +94,6 @@ type TargetedAutoIncrInserter interface {
 
 func standardInsertAutoIncr(exec SqlExecutor, insertSql string, params ...interface{}) (int64, error) {
 	res, err := exec.Exec(insertSql, params...)
-	// DEBUG
-	fmt.Printf("InsertAutoInc: %s\n", insertSql)
 	if err != nil {
 		return 0, err
 	}

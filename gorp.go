@@ -909,19 +909,16 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				rtm := m.AddTable(subFieldValueInterface)
 				fmt.Printf("After AddTable %v:\n", rtm)
 
-				r := RelationMap{*rtm, pt.ForeignKey, subFieldValueInterface, subField.Name()}
+				//r := RelationMap{*rtm, pt.ForeignKey, subFieldValueInterface, subField.Name()}
+				r := RelationMap{DetailTable: *rtm, ForeignKeyFieldName: pt.ForeignKey,
+					DetailTableType: subFieldValueInterface, MasterFieldName: masterFieldName}
 
 				//gtm, _, _ := m.tableForPointer(reflect.ValueOf(f.Type), false)
 				tm.Relations = append(tm.Relations, &r)
 
 				if m.DebugLevel > 2 {
-
-					//fmt.Printf("RELATION Type %v:\n", f.Type)
-					fmt.Printf("RELATION Table %v:\n", rtm)
-					fmt.Print("RELATION: %v\n", tm.Relations)
-
-					//fmt.Print("RELATION gtm: %v\n", gtm)
-
+					fmt.Printf("*********RELATION Map\n %s:\n", r.String())
+					fmt.Printf("*********RELATION Map END\n")
 				}
 			}
 
@@ -1385,8 +1382,8 @@ func (m *DbMap) TruncateTables() error {
 	return err
 }
 
-// Insert runs a SQL INSERT statement for each element in list.  List
-// items must be pointers.
+// Insert runs a SQL INSERT statement for each element in list.
+// List items must be pointers.
 //
 // Any interface whose TableMap has an auto-increment primary key will
 // have its last insert id bound to the PK field on the struct.
@@ -1396,7 +1393,24 @@ func (m *DbMap) TruncateTables() error {
 //
 // Panics if any interface in the list has not been registered with AddTable
 func (m *DbMap) Insert(list ...interface{}) error {
-	return insert(m, m, list...)
+	return insert(m, m, false, list...)
+}
+
+// InsertWithChilds runs a SQL INSERT statement for each element in list.
+// If nested structures exist in one of the elements in list, they are
+// inserted, too.
+// The nested structs to insert are read from the relations list in the
+// tablemap, which are populated during m.AddTable
+//
+// Any interface whose TableMap has an auto-increment primary key will
+// have its last insert id bound to the PK field on the struct.
+//
+// The hook functions PreInsert() and/or PostInsert() will be executed
+// before/after the INSERT statement if the interface defines them.
+//
+// Panics if any interface in the list has not been registered with AddTable
+func (m *DbMap) InsertWithChilds(list ...interface{}) error {
+	return insert(m, m, true, list...)
 }
 
 // Store checks for each element in the list if it is already present in the
@@ -1416,11 +1430,16 @@ func (m *DbMap) Insert(list ...interface{}) error {
 func (m *DbMap) Store(list ...interface{}) error {
 	var err error
 	for _, ptr := range list {
+		// Check if a pointer to reflect.Value has been passed
+		if reflect.TypeOf(ptr).String() == "*reflect.Value" {
+			// Indirect from Pointer to Value
+			ptr = *ptr.(*reflect.Value)
+		}
 
 		if reflect.TypeOf(ptr).String() == "reflect.Value" {
-			fmt.Printf("Store type %s\n", reflect.TypeOf(ptr))
-			fmt.Printf("Store type2 '%s'\n", reflect.TypeOf(ptr).String())
-			fmt.Printf("Store name %v\n", reflect.TypeOf(ptr).Name())
+			fmt.Printf("+++++++++++++++ Store type %s\n", reflect.TypeOf(ptr))
+			fmt.Printf("+++++++++++++++ Store type2 '%s'\n", reflect.TypeOf(ptr).String())
+			fmt.Printf("+++++++++++++++ Store name %v\n", reflect.TypeOf(ptr).Name())
 			err = m.InsertFromValue(m, ptr.(reflect.Value))
 
 			if err != nil {
@@ -1851,7 +1870,7 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 
 // Insert has the same behavior as DbMap.Insert(), but runs in a transaction.
 func (t *Transaction) Insert(list ...interface{}) error {
-	return insert(t.dbmap, t, list...)
+	return insert(t.dbmap, t, false, list...)
 }
 
 // Update had the same behavior as DbMap.Update(), but runs in a transaction.
@@ -2732,7 +2751,32 @@ func update(m *DbMap, exec SqlExecutor, list ...interface{}) (int64, error) {
 	return count, nil
 }
 
-func insert(m *DbMap, exec SqlExecutor, list ...interface{}) error {
+// GetPrimaryKey returns the value(PkId) and the name (PkName) of a primary key from a table, if it exists
+func (m *DbMap) GetPrimaryKey(table *TableMap, elem reflect.Value) (PkId uint64, PkName string, err error) {
+	// Get the primaty key for this table
+	// Use the first PK found, multiple PKs are not supported by now
+	for _, c := range table.Columns {
+		if c.isPK {
+			if PkName == "" {
+				PkName = c.fieldName
+			} else {
+				err = fmt.Errorf("GORP GetPrimaryKey '%s': unsupported multiple primarykeys found in: '%s'\n", elem.String(), table.String())
+				return
+			}
+		}
+	}
+
+	if PkName != "" {
+		f := elem.FieldByName(PkName)
+		PkId = f.Uint()
+	} else {
+		err = fmt.Errorf("GORP no primary key found in '%s'\n", table.TableName)
+		return
+	}
+	return
+}
+
+func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) error {
 
 	var table *TableMap
 	var elem reflect.Value
@@ -2749,12 +2793,6 @@ func insert(m *DbMap, exec SqlExecutor, list ...interface{}) error {
 		// Check if a reflect.Value has been passed
 		if reflect.TypeOf(ptr).String() == "reflect.Value" {
 
-			if m.DebugLevel > 2 {
-				fmt.Println("------------------------------------------------")
-				fmt.Printf("insert reflect type %v\n", reflect.TypeOf(ptr))
-				fmt.Printf("insert reflect name %s\n", reflect.TypeOf(ptr).Name())
-			}
-
 			elem = ptr.(reflect.Value)
 			table, err = m.TableFor(elem.Type(), true)
 			if err != nil {
@@ -2766,10 +2804,6 @@ func insert(m *DbMap, exec SqlExecutor, list ...interface{}) error {
 			if err != nil {
 				return err
 			}
-		}
-
-		if m.DebugLevel > 2 {
-			fmt.Printf("GORP insert table '%s', elem %v\n", table.TableName, elem)
 		}
 
 		eval := elem.Addr().Interface()
@@ -2816,16 +2850,23 @@ func insert(m *DbMap, exec SqlExecutor, list ...interface{}) error {
 			}
 		}
 
-		// Insert child records if present
-		for _, r := range table.Relations {
+		if insertChilds {
+			// Get the primaty key for this table
+			// Use the first PK found, multiple PKs are not supported
+			// by now and will yield an error
+			PkId, _, err := m.GetPrimaryKey(table, elem)
 
-			if m.DebugLevel > 2 {
-				fmt.Printf("******GORP RELATION '%s'\n", r.String())
-			}
+			// Insert child records if present
+			for _, r := range table.Relations {
 
-			err = m.Insert(r.DetailTableType)
-			if err != nil {
-				return err
+				fv := elem.FieldByName(r.MasterFieldName)
+
+				if fv.Kind() == reflect.Slice {
+					err = m.InsertFromSlice(elem, r, PkId)
+				}
+				if err != nil {
+					return errors.New("Insert child relation " + r.DetailTable.String() + " failed: " + err.Error())
+				}
 			}
 		}
 
@@ -2837,6 +2878,39 @@ func insert(m *DbMap, exec SqlExecutor, list ...interface{}) error {
 		}
 	}
 	return nil
+}
+
+// InsertFromSlice inserts an embedded struct described by the RelationMap
+func (m *DbMap) InsertFromSlice(elem reflect.Value, r *RelationMap, PK uint64) error {
+
+	var err error
+	fv := elem.FieldByName(r.MasterFieldName)
+	if fv.Kind() != reflect.Slice {
+		return fmt.Errorf("InsertFromSlice failed because Field '%s' in '%s' is not of type slice\n", r.MasterFieldName, elem.String())
+	}
+	for sliceIndex := 0; sliceIndex < fv.Len(); sliceIndex++ {
+
+		fv0 := fv.Index(sliceIndex)
+		// if the slice holds pointers, get the Element (do indirection)
+		if fv0.Kind() == reflect.Ptr {
+			fv0 = fv0.Elem()
+		}
+
+		// Get the foreign key name for this detail
+		fd := fv0.FieldByName(r.ForeignKeyFieldName)
+
+		// Set the foreign key of this detail
+		if fd.Kind() == reflect.Int64 || fd.Kind() == reflect.Uint64 {
+			fd.SetUint(PK)
+
+		}
+		err = m.Insert(fv0)
+		if err != nil {
+			return errors.New("InsertFromSlice failed: " + err.Error())
+		}
+	}
+
+	return err
 }
 
 func lockError(m *DbMap, exec SqlExecutor, tableName string,
