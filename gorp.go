@@ -1422,9 +1422,11 @@ func (m *DbMap) Store(list ...interface{}) error {
 			fmt.Printf("Store type2 '%s'\n", reflect.TypeOf(ptr).String())
 			fmt.Printf("Store name %v\n", reflect.TypeOf(ptr).Name())
 			err = m.InsertFromValue(m, ptr.(reflect.Value))
+
 			if err != nil {
 				break
 			}
+
 		}
 
 	}
@@ -2731,10 +2733,39 @@ func update(m *DbMap, exec SqlExecutor, list ...interface{}) (int64, error) {
 }
 
 func insert(m *DbMap, exec SqlExecutor, list ...interface{}) error {
+
+	var table *TableMap
+	var elem reflect.Value
+	var err error
+
 	for _, ptr := range list {
-		table, elem, err := m.tableForPointer(ptr, false)
-		if err != nil {
-			return err
+
+		// Check if a pointer to reflect.Value has been passed
+		if reflect.TypeOf(ptr).String() == "*reflect.Value" {
+			// Indirect from Pointer to Value
+			ptr = *ptr.(*reflect.Value)
+		}
+
+		// Check if a reflect.Value has been passed
+		if reflect.TypeOf(ptr).String() == "reflect.Value" {
+
+			if m.DebugLevel > 2 {
+				fmt.Println("------------------------------------------------")
+				fmt.Printf("insert reflect type %v\n", reflect.TypeOf(ptr))
+				fmt.Printf("insert reflect name %s\n", reflect.TypeOf(ptr).Name())
+			}
+
+			elem = ptr.(reflect.Value)
+			table, err = m.TableFor(elem.Type(), true)
+			if err != nil {
+				return err
+			}
+
+		} else {
+			table, elem, err = m.tableForPointer(ptr, false)
+			if err != nil {
+				return err
+			}
 		}
 
 		if m.DebugLevel > 2 {
@@ -2780,6 +2811,19 @@ func insert(m *DbMap, exec SqlExecutor, list ...interface{}) error {
 			}
 		} else {
 			_, err := exec.Exec(bi.query, bi.args...)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Insert child records if present
+		for _, r := range table.Relations {
+
+			if m.DebugLevel > 2 {
+				fmt.Printf("******GORP RELATION '%s'\n", r.String())
+			}
+
+			err = m.Insert(r.DetailTableType)
 			if err != nil {
 				return err
 			}
