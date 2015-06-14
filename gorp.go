@@ -1543,7 +1543,22 @@ func (m *DbMap) InsertFromValue(exec SqlExecutor, value reflect.Value) error {
 // Returns an error if SetKeys has not been called on the TableMap
 // Panics if any interface in the list has not been registered with AddTable
 func (m *DbMap) Update(list ...interface{}) (int64, error) {
-	return update(m, m, list...)
+	return update(m, m, false, list...)
+}
+
+// UpdateWithChilds runs a SQL UPDATE statement for each element in list.
+// If nested structures exist in one of the elements in list, they are
+// inserted or updated, too.
+// The nested structs to update are read from the relations list in the
+// tablemap, which are populated during m.AddTable
+//
+// The hook functions PreUpdate() and/or PostUpdate() will be executed
+// before/after the UPDATE statement if the interface defines them.
+//
+// Returns the number of rows updated.
+// Panics if any interface in the list has not been registered with AddTable
+func (m *DbMap) UpdateWithChilds(list ...interface{}) (int64, error) {
+	return update(m, m, true, list...)
 }
 
 // Delete runs a SQL DELETE statement for each element in list.  List
@@ -1875,7 +1890,7 @@ func (t *Transaction) Insert(list ...interface{}) error {
 
 // Update had the same behavior as DbMap.Update(), but runs in a transaction.
 func (t *Transaction) Update(list ...interface{}) (int64, error) {
-	return update(t.dbmap, t, list...)
+	return update(t.dbmap, t, false, list...)
 }
 
 // Delete has the same behavior as DbMap.Delete(), but runs in a transaction.
@@ -2699,12 +2714,33 @@ func delete(m *DbMap, exec SqlExecutor, list ...interface{}) (int64, error) {
 	return count, nil
 }
 
-func update(m *DbMap, exec SqlExecutor, list ...interface{}) (int64, error) {
+func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) (int64, error) {
+	var table *TableMap
+	var elem reflect.Value
+	var err error
+
 	count := int64(0)
 	for _, ptr := range list {
-		table, elem, err := m.tableForPointer(ptr, true)
-		if err != nil {
-			return -1, err
+
+		// Check if a pointer to reflect.Value has been passed
+		if reflect.TypeOf(ptr).String() == "*reflect.Value" {
+			// Indirect from Pointer to Value
+			ptr = *ptr.(*reflect.Value)
+		}
+
+		// Check if a reflect.Value has been passed
+		if reflect.TypeOf(ptr).String() == "reflect.Value" {
+			elem = ptr.(reflect.Value)
+			table, err = m.TableFor(elem.Type(), true)
+			if err != nil {
+				return -1, err
+			}
+		} else {
+
+			table, elem, err = m.tableForPointer(ptr, true)
+			if err != nil {
+				return -1, err
+			}
 		}
 
 		eval := elem.Addr().Interface()
@@ -2740,6 +2776,26 @@ func update(m *DbMap, exec SqlExecutor, list ...interface{}) (int64, error) {
 		}
 
 		count += rows
+
+		if updateChilds {
+			// Get the primaty key for this table
+			// Use the first PK found, multiple PKs are not supported
+			// by now and will yield an error
+			PkId, _, err := m.GetPrimaryKey(table, elem)
+
+			// Update child records if present
+			for _, r := range table.Relations {
+
+				fv := elem.FieldByName(r.MasterFieldName)
+
+				if fv.Kind() == reflect.Slice {
+					err = m.UpdateDetailsFromSlice(elem, r, PkId)
+				}
+				if err != nil {
+					return count, errors.New("Update child relation " + r.DetailTable.String() + " failed: " + err.Error())
+				}
+			}
+		}
 
 		if v, ok := eval.(HasPostUpdate); ok {
 			err = v.PostUpdate(exec)
@@ -2792,13 +2848,11 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 
 		// Check if a reflect.Value has been passed
 		if reflect.TypeOf(ptr).String() == "reflect.Value" {
-
 			elem = ptr.(reflect.Value)
 			table, err = m.TableFor(elem.Type(), true)
 			if err != nil {
 				return err
 			}
-
 		} else {
 			table, elem, err = m.tableForPointer(ptr, false)
 			if err != nil {
@@ -2862,7 +2916,7 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 				fv := elem.FieldByName(r.MasterFieldName)
 
 				if fv.Kind() == reflect.Slice {
-					err = m.InsertFromSlice(elem, r, PkId)
+					err = m.InsertDetailsFromSlice(elem, r, PkId)
 				}
 				if err != nil {
 					return errors.New("Insert child relation " + r.DetailTable.String() + " failed: " + err.Error())
@@ -2880,8 +2934,10 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 	return nil
 }
 
-// InsertFromSlice inserts an embedded struct described by the RelationMap
-func (m *DbMap) InsertFromSlice(elem reflect.Value, r *RelationMap, PK uint64) error {
+// InsertDetailsFromSlice inserts embedded structs described by the RelationMap r
+// and sets the foreign key into each slice element from PK
+// The master table is described by "elem"
+func (m *DbMap) InsertDetailsFromSlice(elem reflect.Value, r *RelationMap, PK uint64) error {
 
 	var err error
 	fv := elem.FieldByName(r.MasterFieldName)
@@ -2896,17 +2952,90 @@ func (m *DbMap) InsertFromSlice(elem reflect.Value, r *RelationMap, PK uint64) e
 			fv0 = fv0.Elem()
 		}
 
-		// Get the foreign key name for this detail
+		// Get the foreign key name for this detail struct
 		fd := fv0.FieldByName(r.ForeignKeyFieldName)
 
 		// Set the foreign key of this detail
-		if fd.Kind() == reflect.Int64 || fd.Kind() == reflect.Uint64 {
+		if fd.Kind() == reflect.Uint32 || fd.Kind() == reflect.Uint64 {
 			fd.SetUint(PK)
-
+		} else if fd.Kind() == reflect.Int32 || fd.Kind() == reflect.Int64 {
+			fd.SetInt(int64(PK))
+		} else {
+			return errors.New("InsertFromSlice failed: Unable to get ForeignKey: " + fd.Kind().String())
 		}
+
 		err = m.Insert(fv0)
 		if err != nil {
-			return errors.New("InsertFromSlice failed: " + err.Error())
+			return errors.New("InsertFromSlice insert failed: " + err.Error())
+		}
+	}
+
+	return err
+}
+
+// UpdateDetailsFromSlice updates embedded structs described by the RelationMap r.
+// If the primary key of the child/detail struct is set an update is executed, else an insert is done.
+// The master table is described by "elem"
+func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK uint64) error {
+
+	var err error
+	var detailtable *TableMap
+
+	fv := elem.FieldByName(r.MasterFieldName)
+	if fv.Kind() != reflect.Slice {
+		return fmt.Errorf("UpdateDetailsFromSlice failed because Field '%s' in '%s' is not of type slice\n", r.MasterFieldName, elem.String())
+	}
+	for sliceIndex := 0; sliceIndex < fv.Len(); sliceIndex++ {
+
+		fv0 := fv.Index(sliceIndex)
+		// if the slice holds pointers, get the Element (do indirection)
+		if fv0.Kind() == reflect.Ptr {
+			fv0 = fv0.Elem()
+		}
+
+		// Get the foreign key name for this detail struct
+		fd := fv0.FieldByName(r.ForeignKeyFieldName)
+
+		detailtable, err = m.TableFor(fv0.Type(), true)
+		if err != nil {
+			return err
+		}
+
+		// Get the primaty key for this detail table
+		// Use the first PK found, multiple PKs are not supported
+		// by now and will yield an error
+		detailPkId, detailPkName, err := m.GetPrimaryKey(detailtable, fv0)
+
+		if m.DebugLevel > 2 {
+			// DEBUG
+			fmt.Printf("UpdateDetailsFromSlice detailPkId, detailPkName: %d, %s\n ", detailPkId, detailPkName)
+			fmt.Printf("UpdateDetailsFromSlice foreignkey, masterpk: %d, %d\n ", fd.Uint(), PK)
+		}
+		// Check if the foreign key of the detail matches with the primary key of the master table
+		if fd.Uint() == PK {
+			fmt.Printf("!!!!!!!!!!!!!r.ForeignKeyFieldName MATCHES: %d, %d\n", fd.Uint(), PK)
+		} else {
+			// Set the foreign key of this detail
+			if fd.Kind() == reflect.Uint32 || fd.Kind() == reflect.Uint64 {
+				fd.SetUint(PK)
+			} else if fd.Kind() == reflect.Int32 || fd.Kind() == reflect.Int64 {
+				fd.SetInt(int64(PK))
+			} else {
+				return errors.New("UpdateDetailsFromSlice failed: Unable to get ForeignKey: " + fd.Kind().String())
+			}
+
+		}
+		if detailPkId == 0 {
+			err = m.Insert(fv0)
+		} else {
+			var affected int64
+			affected, err = m.Update(fv0)
+			if affected == 0 {
+				return errors.New(fmt.Sprintf("UpdateDetailsFromSlice failed: Update failed for detailPkId: %d\n", detailPkId))
+			}
+		}
+		if err != nil {
+			return errors.New("InsertFromSlice insert failed: " + err.Error())
 		}
 	}
 
