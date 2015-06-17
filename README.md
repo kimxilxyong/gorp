@@ -40,23 +40,39 @@ type Comment struct {
 
 New functions:
 
-	// Inserting a post also inserts all its detail records (=comments)
+for i < 10 {
 	p := post.NewPost()
-... add some comments to the post, check out the example
+	p.Title = fmt.Sprintf("Post number %d", i)
+	p.PostDate = time.Now()
+        // ... add some comments to the post
+        x = 0
+	for x < 10 {
+	    c := p.AddComment()
+	    c.Title = fmt.Sprintf("Comment %d on post %d", x, i)
+	    x++
+	}
+	// Inserting a post also inserts all its detail records (=comments)
 	err = dbmap.InsertWithChilds(&p)
-		
+	
+	// Modify some stuff
+	for y, c := range p.Comments {
+		c.Title = fmt.Sprintf("UpdatedComment %d ", y) + c.Title
+		x++
+	}	
 	rowsaffected, err = dbmap.UpdateWithChilds(&p)
 		
 	res, err := dbmap.GetWithChilds(post.Post{}, PrimaryKey)
 	resp := res.(*post.Post)
+}
 ```
 
-How to use it, example code for gorp with indexes:
-```
-github.com/kimxilxyong/intogooglego/tree/master/testGorpEmbeddedStructs
-```
 
-Features: 
+How to use it, full example code for using detail/child tables with gorp:
+
+http://github.com/kimxilxyong/intogooglego/tree/master/testGorpEmbeddedStructs
+
+
+Features supported by Gorp With Indexes: 
 * Automatic index generation from field tags
 * Automatic support for detail tables
 * Multifield indexes
@@ -66,13 +82,15 @@ Features:
 * Backward compatibility, does not break current code which uses standard gorp
 
 
-
 If you want to run the unit tests:
 ```
 github.com\kimxilxyong\gorp> test_all.bat
 ```
 
 Tested with MySQL and PostgreSQL. Other databases are not supported currently.
+
+Please note:
+The following part of the readme is from the original gorp:
 
 
 # Go Relational Persistence
