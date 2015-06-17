@@ -1,48 +1,71 @@
 # Gorp with Indexes
 
-It is currently unstable - do not checkout
-
 This is a fork of http://github.com/go-gorp/gorp
-The purpose of this fork is to implement automatic index generation from tags or from go code
+The purpose of this fork is to implement automatic index generation from tags or from go code and support for detail/child tables.
 
 How to get it:
 ```
 go get github.com/kimxilxyong/gorp
 ```
 
-How to use it, example code for Gorp with Indexes:
+A new feature has been added as of 2015.06.17:
+
+* Support for detail tables
+
+```go
+// holds a single post
+// You can use ether db or gorp as tag
+type Post struct {
+	Id        uint64     `db:"notnull, PID, primarykey, autoincrement"`
+	Created   time.Time  `db:"notnull"`
+	Site      string     `db:"name: PostSite, notnull, size:50"`
+	User      string     `db:"index:idx_user, size:64"`
+...
+	Err       error      `db:"ignorefield"` // ignore this field when storing with gorp
+	Comments  []*Comment `db:"relation:PostId"` 
+	// will create a table Comments as a detail table with foreignkey PostId
+	// If you want a different name just issue a: 
+	// dbmap.AddTableWithName(post.Comment{}, "comments_embedded_test")
+	// after: dbmap.AddTableWithName(post.Post{}, "posts_embedded_test")
+	// but before: dbmap.CreateTablesIfNotExists()
+}
+
+// holds a single comment bound to a post - this is the detail/child struct
+type Comment struct {
+	Id            uint64    `db:"notnull, primarykey, autoincrement"`
+	PostId        uint64    `db:"notnull, index:idx_foreign_key_postid"` // points to post.id
+	User          string    `db:"size:64"`
+	Title         string    `db:"size:256"`
+}
+
+New functions:
+
+	// Inserting a post also inserts all its detail records (=comments)
+	p := post.NewPost()
+... add some comments to the post, check out the example
+	err = dbmap.InsertWithChilds(&p)
+		
+	rowsaffected, err = dbmap.UpdateWithChilds(&p)
+		
+	res, err := dbmap.GetWithChilds(post.Post{}, PrimaryKey)
+	resp := res.(*post.Post)
 ```
-github.com\kimxilxyong\intogooglego\redditFetchGorp
+
+How to use it, example code for gorp with indexes:
 ```
+github.com/kimxilxyong/intogooglego/tree/master/testGorpEmbeddedStructs
+```
+
 Features: 
 * Automatic index generation from field tags
+* Automatic support for detail tables
 * Multifield indexes
 * Detection of index changes
 * Extended tag syntax: name, index, notnull, primarykey, autoincrement, size
 * Optional tag anchor: "gorp" instead of "db"
 * Backward compatibility, does not break current code which uses standard gorp
 
-```
-Example:
-// holds a single post
-type Post struct {
-	Id           uint64    `db:"notnull, PID, primarykey, autoincrement"`
-	SecondTestID int       `db:"notnull, name: SID"`
-	Created      time.Time `db:"notnull, primarykey"`
-	PostDate     time.Time `db:"notnull"`
-	Site         string    `db:"name: PostSite, notnull, size:50"`
-	PostId       string    `db:"notnull, size:32, unique"`
-	Score        int       `db:"notnull"`
-	Title        string    `db:"notnull"`
-	Url          string    `db:"notnull"`
-	User         string    `db:"index:idx_user, size:64"`
-	PostSub      string    `db:"index:idx_user, size:128"`
-	UserIP       string    `db:"notnull, size:16"`
-	BodyType     string    `db:"notnull, size:64"`
-	Body         string    `db:"name:PostBody, size:16384"`
-	Err          error     `db:"-"` // ignore this field when storing with gorp
-}
-```
+
 
 If you want to run the unit tests:
 ```
