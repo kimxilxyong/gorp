@@ -800,12 +800,9 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 	// if so, update the name and return the existing pointer
 	for i := range m.tables {
 		table := m.tables[i]
-		if m.DebugLevel > 2 {
-			fmt.Printf("*** AddTable table.gotype %v\n", table.gotype)
-		}
 		if table.gotype == t {
-			if m.DebugLevel > 2 {
-				fmt.Printf("*** AddTable changed table name from %s to %s\n", table.TableName, name)
+			if m.DebugLevel > 3 {
+				fmt.Printf("AddTableWithNameAndSchema changed table name from %s to %s\n", table.TableName, name)
 			}
 
 			table.TableName = name
@@ -813,8 +810,8 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 		}
 	}
 
-	if m.DebugLevel > 2 {
-		fmt.Printf("*** AddTable type %v\n", t)
+	if m.DebugLevel > 3 {
+		fmt.Printf("AddTable type %v\n", t)
 	}
 
 	tmap := &TableMap{gotype: t, TableName: name, SchemaName: schema, dbmap: m}
@@ -875,54 +872,18 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				}
 
 				masterFieldName := f.Name
-
-				if m.DebugLevel > 2 {
-					fmt.Printf("RELATION: %v\n", f)
-					fmt.Printf("RELATION MasterField: %v\n", masterFieldName)
-					fmt.Printf("RELATION Type: %v\n", f.Type)
-					fmt.Printf("RELATION Type Elem: %v\n", subField)
-				}
-				vi := reflect.New(subField).Interface()
-
 				subFieldValue := reflect.New(subField)
-
-				if m.DebugLevel > 2 {
-					fmt.Printf("RELATION Value Elem: %v\n", subFieldValue)
-					fmt.Printf("RELATION subFieldValue.Kind Before: %v\n", subFieldValue.Kind())
-				}
 
 				if subFieldValue.Kind() == reflect.Ptr {
 					subFieldValue = reflect.Indirect(subFieldValue)
 				}
 
-				if m.DebugLevel > 2 {
-					fmt.Printf("RELATION subFieldValue.Kind After: %v\n", subFieldValue.Kind())
-					fmt.Printf("RELATION Value Elem: %v\n", subFieldValue)
-				}
-
-				//ind := reflect.Indirect(subFieldValue).Interface()
 				subFieldValueInterface := subFieldValue.Interface()
-
-				if m.DebugLevel > 2 {
-					fmt.Printf("**** RELATION TypeOf vi: %v\n", reflect.TypeOf(vi))
-					fmt.Printf("**** RELATION TypeOf sub: %v\n", reflect.TypeOf(subFieldValueInterface))
-				}
-
-				fmt.Printf("RELATION Interface: %v\n", subFieldValueInterface)
 				rtm := m.AddTable(subFieldValueInterface)
-				fmt.Printf("After AddTable: %v\n", rtm)
-
-				//r := RelationMap{*rtm, pt.ForeignKey, subFieldValueInterface, subField.Name()}
 				r := RelationMap{DetailTable: rtm, ForeignKeyFieldName: pt.ForeignKey,
 					DetailTableType: subFieldValueInterface, MasterFieldName: masterFieldName}
 
-				//gtm, _, _ := m.tableForPointer(reflect.ValueOf(f.Type), false)
 				tm.Relations = append(tm.Relations, &r)
-
-				if m.DebugLevel > 2 {
-					fmt.Printf("*********RELATION Map\n %s:\n", r.String())
-					fmt.Printf("*********RELATION Map END\n")
-				}
 			}
 
 			gotype := f.Type
@@ -1416,6 +1377,7 @@ func (m *DbMap) InsertWithChilds(list ...interface{}) error {
 	return insert(m, m, true, list...)
 }
 
+/*
 // Store checks for each element in the list if it is already present in the
 // database by checking on the primary key. If not present an SQL INSERT is done,
 // else an SQL UPDATE
@@ -1454,7 +1416,9 @@ func (m *DbMap) Store(list ...interface{}) error {
 	}
 	return err
 }
+*/
 
+/*
 func (m *DbMap) InsertFromValue(exec SqlExecutor, value reflect.Value) error {
 
 	table, err := m.TableFor(value.Type(), true)
@@ -1534,6 +1498,7 @@ func (m *DbMap) InsertFromValue(exec SqlExecutor, value reflect.Value) error {
 
 	return nil
 }
+*/
 
 // Update runs a SQL UPDATE statement for each element in list.  List
 // items must be pointers.
