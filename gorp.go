@@ -237,7 +237,7 @@ func (t TableMap) String() string {
 // Use tablemap.AddRelation() or field tag `db:"relation:<foreignkey field in detail table>"`to create these
 // Example:	Comments  []*Comment `db:"relation:PostId"`
 type RelationMap struct {
-	DetailTable         TableMap
+	DetailTable         *TableMap
 	ForeignKeyFieldName string
 	DetailTableType     interface{}
 	MasterFieldName     string
@@ -804,6 +804,10 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 			fmt.Printf("*** AddTable table.gotype %v\n", table.gotype)
 		}
 		if table.gotype == t {
+			if m.DebugLevel > 2 {
+				fmt.Printf("*** AddTable changed table name from %s to %s\n", table.TableName, name)
+			}
+
 			table.TableName = name
 			return table
 		}
@@ -865,7 +869,6 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 			// Is this field is marked as a relation to a child/detail struct/table?
 			if pt.ForeignKey != "" {
 
-				//if m.DebugLevel > 2 {
 				subField := f.Type.Elem()
 				if subField.Kind() == reflect.Ptr {
 					subField = subField.Elem()
@@ -874,18 +877,18 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				masterFieldName := f.Name
 
 				if m.DebugLevel > 2 {
-					fmt.Printf("RELATION %v:\n", f)
-					fmt.Printf("RELATION MasterField %v:\n", masterFieldName)
-					fmt.Printf("RELATION Type %v:\n", f.Type)
-					fmt.Printf("RELATION Type Elem %v:\n", subField)
+					fmt.Printf("RELATION: %v\n", f)
+					fmt.Printf("RELATION MasterField: %v\n", masterFieldName)
+					fmt.Printf("RELATION Type: %v\n", f.Type)
+					fmt.Printf("RELATION Type Elem: %v\n", subField)
 				}
 				vi := reflect.New(subField).Interface()
 
 				subFieldValue := reflect.New(subField)
 
 				if m.DebugLevel > 2 {
-					fmt.Printf("RELATION Value Elem %v:\n", subFieldValue)
-					fmt.Printf("RELATION subFieldValue.Kind Before %v:\n", subFieldValue.Kind())
+					fmt.Printf("RELATION Value Elem: %v\n", subFieldValue)
+					fmt.Printf("RELATION subFieldValue.Kind Before: %v\n", subFieldValue.Kind())
 				}
 
 				if subFieldValue.Kind() == reflect.Ptr {
@@ -893,24 +896,24 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				}
 
 				if m.DebugLevel > 2 {
-					fmt.Printf("RELATION subFieldValue.Kind After %v:\n", subFieldValue.Kind())
-					fmt.Printf("RELATION Value Elem %v:\n", subFieldValue)
+					fmt.Printf("RELATION subFieldValue.Kind After: %v\n", subFieldValue.Kind())
+					fmt.Printf("RELATION Value Elem: %v\n", subFieldValue)
 				}
 
 				//ind := reflect.Indirect(subFieldValue).Interface()
 				subFieldValueInterface := subFieldValue.Interface()
 
 				if m.DebugLevel > 2 {
-					fmt.Printf("**** RELATION TypeOf vi %v:\n", reflect.TypeOf(vi))
-					fmt.Printf("**** RELATION TypeOf sub %v:\n", reflect.TypeOf(subFieldValueInterface))
+					fmt.Printf("**** RELATION TypeOf vi: %v\n", reflect.TypeOf(vi))
+					fmt.Printf("**** RELATION TypeOf sub: %v\n", reflect.TypeOf(subFieldValueInterface))
 				}
 
-				fmt.Printf("RELATION Interface %v:\n", subFieldValueInterface)
+				fmt.Printf("RELATION Interface: %v\n", subFieldValueInterface)
 				rtm := m.AddTable(subFieldValueInterface)
-				fmt.Printf("After AddTable %v:\n", rtm)
+				fmt.Printf("After AddTable: %v\n", rtm)
 
 				//r := RelationMap{*rtm, pt.ForeignKey, subFieldValueInterface, subField.Name()}
-				r := RelationMap{DetailTable: *rtm, ForeignKeyFieldName: pt.ForeignKey,
+				r := RelationMap{DetailTable: rtm, ForeignKeyFieldName: pt.ForeignKey,
 					DetailTableType: subFieldValueInterface, MasterFieldName: masterFieldName}
 
 				//gtm, _, _ := m.tableForPointer(reflect.ValueOf(f.Type), false)
@@ -1591,7 +1594,26 @@ func (m *DbMap) Delete(list ...interface{}) (int64, error) {
 // Returns an error if SetKeys has not been called on the TableMap
 // Panics if any interface in the list has not been registered with AddTable
 func (m *DbMap) Get(i interface{}, keys ...interface{}) (interface{}, error) {
-	return get(m, m, i, keys...)
+	return get(m, m, i, false, keys...)
+}
+
+// GetWithChilds runs a SQL SELECT to fetch a single row from the table based on the
+// primary key(s). All child records are fetched if a RelationMap exists for this table
+//
+// i should be an empty value for the struct to load.  keys should be
+// the primary key value(s) for the row to load.  If multiple keys
+// exist on the table, the order should match the column order
+// specified in SetKeys() when the table mapping was defined.
+//
+// The hook function PostGet() will be executed after the SELECT
+// statement if the interface defines them.
+//
+// Returns a pointer to a struct that matches or nil if no row is found.
+//
+// Returns an error if SetKeys has not been called on the TableMap
+// Panics if any interface in the list has not been registered with AddTable
+func (m *DbMap) GetWithChilds(i interface{}, keys ...interface{}) (interface{}, error) {
+	return get(m, m, i, true, keys...)
 }
 
 // Select runs an arbitrary SQL query, binding the columns in the result
@@ -1900,7 +1922,7 @@ func (t *Transaction) Delete(list ...interface{}) (int64, error) {
 
 // Get has the same behavior as DbMap.Get(), but runs in a transaction.
 func (t *Transaction) Get(i interface{}, keys ...interface{}) (interface{}, error) {
-	return get(t.dbmap, t, i, keys...)
+	return get(t.dbmap, t, i, false, keys...)
 }
 
 // Select has the same behavior as DbMap.Select(), but runs in a transaction.
@@ -2482,14 +2504,14 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 			// Parse all field tags into a GorpParsedTag
 			pt := m.ParseTag(field.Tag)
 
-			if m.DebugLevel > 2 {
+			if m.DebugLevel > 3 {
 				// DEBUG
-				fmt.Printf("t Reflect LOOKING FOR: %s\n", colName)
-				fmt.Printf("t Reflect name: %s\n", field.Name)
-				fmt.Printf("t Reflect PkgPath: %s\n", field.PkgPath)
-				fmt.Printf("t Reflect Tag: %s\n", field.Tag)
-				fmt.Printf("t Reflect pt.ColumnName: %s\n", pt.ColumnName)
-				fmt.Println("-----XXXXXXXXXXXXXXXXXX-----------")
+				fmt.Printf("columnToFieldIndex LOOKING FOR: %s\n", colName)
+				fmt.Printf("columnToFieldIndex Name: %s\n", field.Name)
+				fmt.Printf("columnToFieldIndex PkgPath: %s\n", field.PkgPath)
+				fmt.Printf("columnToFieldIndex Tag: %s\n", field.Tag)
+				fmt.Printf("columnToFieldIndex pt.ColumnName: %s\n", pt.ColumnName)
+				fmt.Println("----- columnToFieldIndex END -----------")
 			}
 
 			if pt.Transient {
@@ -2501,7 +2523,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 				colMap := colMapOrNil(table, pt.ColumnName)
 				if colMap != nil {
 
-					if m.DebugLevel > 2 {
+					if m.DebugLevel > 3 {
 						// DEBUG
 						fmt.Printf("Changed ColumnName from %s to %s\n", pt.ColumnName, colMap.ColumnName)
 					}
@@ -2511,13 +2533,8 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 
 			ColMatches := (colName == strings.ToLower(pt.ColumnName))
 
-			if m.DebugLevel > 2 {
+			if m.DebugLevel > 3 {
 				// DEBUG
-				fmt.Printf("t Reflect LOOKING FOR: %s\n", colName)
-				fmt.Printf("t Reflect name: %s\n", field.Name)
-				fmt.Printf("t Reflect PkgPath: %s\n", field.PkgPath)
-				fmt.Printf("t Reflect Tag: %s\n", field.Tag)
-				fmt.Printf("t Reflect pt.ColumnName: %s\n", pt.ColumnName)
 				if ColMatches {
 					fmt.Println("--!!!! YES MATCHES !!!!-----------")
 				} else {
@@ -2534,7 +2551,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 			missingColNames = append(missingColNames, colName)
 		}
 
-		if m.DebugLevel > 2 {
+		if m.DebugLevel > 3 {
 			// DEBUG
 			fmt.Printf("colToFieldIndex[x]: %v\n ", colToFieldIndex[x])
 			fmt.Println("columnToFieldIndex colName: " + colName)
@@ -2606,7 +2623,7 @@ func toType(i interface{}) (reflect.Type, error) {
 	return t, nil
 }
 
-func get(m *DbMap, exec SqlExecutor, i interface{},
+func get(m *DbMap, exec SqlExecutor, i interface{}, getChilds bool,
 	keys ...interface{}) (interface{}, error) {
 
 	t, err := toType(i)
@@ -2653,6 +2670,32 @@ func get(m *DbMap, exec SqlExecutor, i interface{},
 		err = c.Bind()
 		if err != nil {
 			return nil, err
+		}
+	}
+
+	if getChilds {
+		// Get the primaty key for this table
+		// Use the first PK found, multiple PKs are not supported
+		// by now and will yield an error
+		elem := v.Elem()
+		PkId, _, err := m.GetPrimaryKey(table, elem)
+
+		// Get child records if present - using the RelationMaps for this TableMap
+		for _, r := range table.Relations {
+
+			// Get the slice field in the master where the details will be stored into
+			fv := elem.FieldByName(r.MasterFieldName)
+			if fv.Kind() == reflect.Slice {
+
+				sql := fmt.Sprintf("select * from %s where %s = %d", m.Dialect.QuotedTableForQuery(table.SchemaName, r.DetailTable.TableName),
+					m.Dialect.QuoteField(r.ForeignKeyFieldName), PkId)
+				_, err = m.Select(fv.Addr().Interface(), sql)
+				if err != nil {
+					return nil, errors.New("Get child relation " + r.DetailTable.TableName + " failed: " + err.Error())
+				}
+			} else {
+				return nil, errors.New("Get child relation failed: Type " + fv.Type().Name() + " is not a slice")
+			}
 		}
 	}
 
@@ -3004,17 +3047,19 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 		// Get the primaty key for this detail table
 		// Use the first PK found, multiple PKs are not supported
 		// by now and will yield an error
-		detailPkId, detailPkName, err := m.GetPrimaryKey(detailtable, fv0)
+		detailPkId, _, err := m.GetPrimaryKey(detailtable, fv0)
 
-		if m.DebugLevel > 2 {
-			// DEBUG
-			fmt.Printf("UpdateDetailsFromSlice detailPkId, detailPkName: %d, %s\n ", detailPkId, detailPkName)
-			fmt.Printf("UpdateDetailsFromSlice foreignkey, masterpk: %d, %d\n ", fd.Uint(), PK)
-		}
 		// Check if the foreign key of the detail matches with the primary key of the master table
 		if fd.Uint() == PK {
-			fmt.Printf("!!!!!!!!!!!!!r.ForeignKeyFieldName MATCHES: %d, %d\n", fd.Uint(), PK)
+			if m.DebugLevel > 3 {
+				fmt.Printf("r.ForeignKeyFieldName %s matches: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
+			}
 		} else {
+
+			if m.DebugLevel > 2 {
+				fmt.Printf("r.ForeignKeyFieldName %s does not match: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
+			}
+
 			// Set the foreign key of this detail
 			if fd.Kind() == reflect.Uint32 || fd.Kind() == reflect.Uint64 {
 				fd.SetUint(PK)
@@ -3046,7 +3091,7 @@ func lockError(m *DbMap, exec SqlExecutor, tableName string,
 	existingVer int64, elem reflect.Value,
 	keys ...interface{}) (int64, error) {
 
-	existing, err := get(m, exec, elem.Interface(), keys...)
+	existing, err := get(m, exec, elem.Interface(), false, keys...)
 	if err != nil {
 		return -1, err
 	}
