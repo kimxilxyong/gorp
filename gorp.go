@@ -1074,6 +1074,7 @@ func (m *DbMap) addIndexForColumn(cm *ColumnMap, tag reflect.StructTag, tm Table
 
 		im = &IndexMap{
 			IndexName:  pt.IndexName,
+			Unique:     pt.IsIndexUnique,
 			fieldNames: []string{fn},
 		}
 		indexes = append(indexes, im)
