@@ -213,6 +213,7 @@ type TableMap struct {
 	Columns        []*ColumnMap
 	Indexes        []*IndexMap    // list of indexes for this table
 	Relations      []*RelationMap // list of detail/child tables for this table
+	LastOpInfo     CRUDInfo       // info about the last operation on this table
 	keys           []*ColumnMap
 	uniqueTogether [][]string
 	version        *ColumnMap
@@ -249,6 +250,50 @@ func (r RelationMap) String() string {
 	s = s + "ForeignKeyFieldName: " + r.ForeignKeyFieldName + "\n"
 	s = s + "DetailTableType: " + reflect.TypeOf(r.DetailTableType).Name() + "\n"
 	s = s + "MasterFieldName: " + r.MasterFieldName
+	return s
+}
+
+// CRUDInfo contains info about a CRUD operation
+type CRUDInfo struct {
+	Type                CRUDType
+	BindPlanUsed        *bindPlan
+	RowCount            int64
+	ChildUpdateRowCount int64
+	ChildInsertRowCount int64
+}
+
+// Resets all field to its zero value
+func (i *CRUDInfo) Reset() {
+	i.Type = Unknown
+	i.BindPlanUsed = nil
+	i.RowCount = 0
+	i.ChildUpdateRowCount = 0
+	i.ChildInsertRowCount = 0
+}
+
+type CRUDType int
+
+const (
+	Unknown CRUDType = iota
+	Insert
+	Select
+	Update
+	Delete
+)
+
+func (t CRUDType) String() string {
+	var s string
+	if t&Insert == Insert {
+		s = "Insert"
+	} else if t&Select == Select {
+		s = "Select"
+	} else if t&Update == Update {
+		s = "Update"
+	} else if t&Delete == Delete {
+		s = "Delete"
+	} else {
+		s = "Unknown"
+	}
 	return s
 }
 
@@ -444,6 +489,10 @@ func (t *TableMap) bindInsert(elem reflect.Value) (bindInstance, error) {
 							plan.versField = col.fieldName
 							plan.argFields = append(plan.argFields, versFieldConst)
 						} else {
+							// Check if this column is a NOT NULL
+							if err := checkForNotNull(elem, col); err != nil {
+								return bindInstance{}, err
+							}
 							plan.argFields = append(plan.argFields, col.fieldName)
 						}
 
@@ -493,6 +542,10 @@ func (t *TableMap) bindUpdate(elem reflect.Value) (bindInstance, error) {
 					plan.versField = col.fieldName
 					plan.argFields = append(plan.argFields, versFieldConst)
 				} else {
+					// Check if this column is a NOT NULL
+					if err := checkForNotNull(elem, col); err != nil {
+						return bindInstance{}, err
+					}
 					plan.argFields = append(plan.argFields, col.fieldName)
 				}
 				x++
@@ -634,6 +687,10 @@ type ColumnMap struct {
 	// Passed to Dialect.ToSqlType() to assist in informing the
 	// correct column type to map to in CreateTables()
 	MaxSize int
+
+	// If EnforceNotNull is true then an error will be generated if
+	// a zero value for this coumn is inserted/updated into a table
+	EnforceNotNull bool
 
 	fieldName  string
 	gotype     reflect.Type
@@ -911,15 +968,16 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 			}
 
 			cm := &ColumnMap{
-				ColumnName: pt.ColumnName,
-				Transient:  pt.Transient,
-				fieldName:  f.Name,
-				gotype:     gotype,
-				MaxSize:    pt.MaxColumnSize,
-				isNotNull:  pt.IsNotNull,
-				Unique:     pt.IsFieldUnique,
-				isPK:       pt.IsPk,
-				isAutoIncr: pt.IsAutoIncr,
+				ColumnName:     pt.ColumnName,
+				Transient:      pt.Transient,
+				fieldName:      f.Name,
+				gotype:         gotype,
+				MaxSize:        pt.MaxColumnSize,
+				isNotNull:      pt.IsNotNull,
+				EnforceNotNull: pt.EnforceNotNull,
+				Unique:         pt.IsFieldUnique,
+				isPK:           pt.IsPk,
+				isAutoIncr:     pt.IsAutoIncr,
 			}
 			// Check for nested fields of the same field name and
 			// override them.
@@ -1523,7 +1581,7 @@ func (m *DbMap) Update(list ...interface{}) (int64, error) {
 // The hook functions PreUpdate() and/or PostUpdate() will be executed
 // before/after the UPDATE statement if the interface defines them.
 //
-// Returns the number of rows updated.
+// Returns the number of rows updated and the number of childs updated
 // Panics if any interface in the list has not been registered with AddTable
 func (m *DbMap) UpdateWithChilds(list ...interface{}) (int64, error) {
 	return update(m, m, true, list...)
@@ -1768,16 +1826,17 @@ func argsString(args ...interface{}) string {
 ///////////////
 
 type GorpParsedTag struct {
-	ColumnName    string
-	IsFieldUnique bool
-	IndexName     string
-	IsIndexUnique bool
-	MaxColumnSize int
-	IsNotNull     bool
-	IsAutoIncr    bool
-	IsPk          bool
-	Transient     bool
-	ForeignKey    string
+	ColumnName     string
+	IsFieldUnique  bool
+	IndexName      string
+	IsIndexUnique  bool
+	MaxColumnSize  int
+	IsNotNull      bool
+	EnforceNotNull bool
+	IsAutoIncr     bool
+	IsPk           bool
+	Transient      bool
+	ForeignKey     string
 }
 
 // ParseTag extracts all field tags from input param tag and resturns all found options
@@ -1847,6 +1906,9 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 				pt.MaxColumnSize, _ = strconv.Atoi(o[1])
 			case "notnull":
 				pt.IsNotNull = true
+			case "enforcenotnull":
+				pt.IsNotNull = true
+				pt.EnforceNotNull = true
 			case "unique":
 				pt.IsFieldUnique = true
 			case "autoincrement":
@@ -2643,13 +2705,19 @@ func get(m *DbMap, exec SqlExecutor, i interface{}, getChilds bool,
 		// Use the first PK found, multiple PKs are not supported
 		// by now and will yield an error
 		elem := v.Elem()
-		PkId, _, err := m.GetPrimaryKey(table, elem)
+		PkId, _, err := m.GetPrimaryKey(*table, elem)
+		if err != nil {
+			return nil, errors.New("GetPrimaryKey failed in table '" + table.TableName + ": " + err.Error())
+		}
 
 		// Get child records if present - using the RelationMaps for this TableMap
 		for _, r := range table.Relations {
 
 			// Get the slice field in the master where the details will be stored into
 			fv := elem.FieldByName(r.MasterFieldName)
+			if !fv.IsValid() {
+				return nil, errors.New("Field '" + r.MasterFieldName + "' not found in " + v.Kind().String() + " '" + elem.String() + "'")
+			}
 			if fv.Kind() == reflect.Slice {
 
 				sql := fmt.Sprintf("select * from %s where %s = %d", m.Dialect.QuotedTableForQuery(table.SchemaName, r.DetailTable.TableName),
@@ -2784,23 +2852,32 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 		}
 
 		count += rows
+		// Store info about this update operation
+		table.LastOpInfo.Type = Update
+		table.LastOpInfo.BindPlanUsed = &table.updatePlan
+		table.LastOpInfo.RowCount = count
 
 		if updateChilds {
 			// Get the primaty key for this table
 			// Use the first PK found, multiple PKs are not supported
 			// by now and will yield an error
-			PkId, _, err := m.GetPrimaryKey(table, elem)
-
+			PkId, _, err := m.GetPrimaryKey(*table, elem)
+			if err != nil {
+				return count, errors.New("GetPrimaryKey failed: " + err.Error())
+			}
 			// Update child records if present
 			for _, r := range table.Relations {
 
 				fv := elem.FieldByName(r.MasterFieldName)
 
 				if fv.Kind() == reflect.Slice {
-					err = m.UpdateDetailsFromSlice(elem, r, PkId)
-				}
-				if err != nil {
-					return count, errors.New("Update child relation " + r.DetailTable.String() + " failed: " + err.Error())
+					updatecount, insertcount, err := m.UpdateDetailsFromSlice(elem, r, PkId)
+
+					if err != nil {
+						return count, errors.New("Update child relation on table '" + r.DetailTable.TableName + "' failed: " + err.Error())
+					}
+					table.LastOpInfo.ChildUpdateRowCount += updatecount
+					table.LastOpInfo.ChildInsertRowCount += insertcount
 				}
 			}
 		}
@@ -2816,25 +2893,36 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 }
 
 // GetPrimaryKey returns the value(PkId) and the name (PkName) of a primary key from a table, if it exists
-func (m *DbMap) GetPrimaryKey(table *TableMap, elem reflect.Value) (PkId uint64, PkName string, err error) {
-	// Get the primaty key for this table
-	// Use the first PK found, multiple PKs are not supported by now
+func (m *DbMap) GetPrimaryKey(table TableMap, elem reflect.Value) (PkId uint64, PkName string, err error) {
+	// Get the primaty key for this table, multiple PKs are not supported by now
 	for _, c := range table.Columns {
 		if c.isPK {
 			if PkName == "" {
 				PkName = c.fieldName
 			} else {
-				err = fmt.Errorf("GORP GetPrimaryKey '%s': unsupported multiple primarykeys found in: '%s'\n", elem.String(), table.String())
+				err = fmt.Errorf("unsupported multiple primarykeys found in table '%s'", table.TableName)
 				return
 			}
 		}
 	}
 
-	if PkName != "" {
-		f := elem.FieldByName(PkName)
+	if PkName == "" {
+		err = fmt.Errorf("No primary key found in table '%s'", table.TableName)
+		return
+	}
+	// Get the value of the primary key
+	f := elem.FieldByName(PkName)
+	if !f.IsValid() {
+		err = fmt.Errorf("Field '%s' not found in table '%s'", PkName, table.TableName)
+		return
+	}
+	k := f.Kind()
+	if (k == reflect.Int) || (k == reflect.Int16) || (k == reflect.Int32) || (k == reflect.Int64) {
+		PkId = uint64(f.Int())
+	} else if (k == reflect.Uint) || (k == reflect.Uint16) || (k == reflect.Uint32) || (k == reflect.Uint64) {
 		PkId = f.Uint()
 	} else {
-		err = fmt.Errorf("GORP no primary key found in '%s'\n", table.TableName)
+		err = fmt.Errorf("Primary key '%s' in table '%s' is not of type int or uint", PkName, table.TableName)
 		return
 	}
 	return
@@ -2912,11 +3000,19 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 			}
 		}
 
+		// Store info about this update operation
+		table.LastOpInfo.Type = Insert
+		table.LastOpInfo.BindPlanUsed = &table.insertPlan
+		table.LastOpInfo.RowCount++
+
 		if insertChilds {
 			// Get the primaty key for this table
 			// Use the first PK found, multiple PKs are not supported
 			// by now and will yield an error
-			PkId, _, err := m.GetPrimaryKey(table, elem)
+			PkId, _, err := m.GetPrimaryKey(*table, elem)
+			if err != nil {
+				return errors.New("Insert child relation failed: " + err.Error())
+			}
 
 			// Insert child records if present
 			for _, r := range table.Relations {
@@ -2924,11 +3020,16 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 				fv := elem.FieldByName(r.MasterFieldName)
 
 				if fv.Kind() == reflect.Slice {
-					err = m.InsertDetailsFromSlice(elem, r, PkId)
+					var count int64
+					count, err = m.InsertDetailsFromSlice(elem, r, PkId)
+					if err != nil {
+						return errors.New("Insert child relation into table '" + r.DetailTable.TableName + "' failed: " + err.Error())
+
+					}
+					table.LastOpInfo.ChildInsertRowCount += count
+					table.LastOpInfo.RowCount -= count
 				}
-				if err != nil {
-					return errors.New("Insert child relation " + r.DetailTable.String() + " failed: " + err.Error())
-				}
+
 			}
 		}
 
@@ -2945,12 +3046,14 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 // InsertDetailsFromSlice inserts embedded structs described by the RelationMap r
 // and sets the foreign key into each slice element from PK
 // The master table is described by "elem"
-func (m *DbMap) InsertDetailsFromSlice(elem reflect.Value, r *RelationMap, PK uint64) error {
+func (m *DbMap) InsertDetailsFromSlice(elem reflect.Value, r *RelationMap, PK uint64) (int64, error) {
 
 	var err error
+	var count int64
+
 	fv := elem.FieldByName(r.MasterFieldName)
 	if fv.Kind() != reflect.Slice {
-		return fmt.Errorf("InsertFromSlice failed because Field '%s' in '%s' is not of type slice\n", r.MasterFieldName, elem.String())
+		return 0, fmt.Errorf("InsertFromSlice failed because Field '%s' in '%s' is not of type slice\n", r.MasterFieldName, elem.String())
 	}
 	for sliceIndex := 0; sliceIndex < fv.Len(); sliceIndex++ {
 
@@ -2969,29 +3072,29 @@ func (m *DbMap) InsertDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 		} else if fd.Kind() == reflect.Int32 || fd.Kind() == reflect.Int64 {
 			fd.SetInt(int64(PK))
 		} else {
-			return errors.New("InsertFromSlice failed: Unable to get ForeignKey: " + fd.Kind().String())
+			return count, errors.New("InsertDetailsFromSlice failed: Unable to get ForeignKey: " + fd.Kind().String())
 		}
 
 		err = m.Insert(fv0)
 		if err != nil {
-			return errors.New("InsertFromSlice insert failed: " + err.Error())
+			return count, errors.New("InsertDetailsFromSlice failed: " + err.Error())
 		}
+		count++
 	}
 
-	return err
+	return count, err
 }
 
-// UpdateDetailsFromSlice updates embedded structs described by the RelationMap r.
+// UpdateDetailsFromSlice updates embedded structs described by the RelationMap r in TableMap t
 // If the primary key of the child/detail struct is set an update is executed, else an insert is done.
-// The master table is described by "elem"
-func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK uint64) error {
-
-	var err error
+// The master table is the reflect value "elem"
+func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK uint64) (ucount int64, icount int64, err error) {
 	var detailtable *TableMap
 
 	fv := elem.FieldByName(r.MasterFieldName)
 	if fv.Kind() != reflect.Slice {
-		return fmt.Errorf("UpdateDetailsFromSlice failed because Field '%s' in '%s' is not of type slice\n", r.MasterFieldName, elem.String())
+		err = fmt.Errorf("UpdateDetailsFromSlice failed because Field '%s' in '%s' is not of type slice\n", r.MasterFieldName, elem.String())
+		return
 	}
 	for sliceIndex := 0; sliceIndex < fv.Len(); sliceIndex++ {
 
@@ -3003,16 +3106,26 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 
 		// Get the foreign key name for this detail struct
 		fd := fv0.FieldByName(r.ForeignKeyFieldName)
+		if !fd.IsValid() {
+			err = fmt.Errorf("Field '%s' not found in '%s'", r.ForeignKeyFieldName, fv0.Type().String())
+			return
+		}
 
 		detailtable, err = m.TableFor(fv0.Type(), true)
 		if err != nil {
-			return err
+			err = fmt.Errorf("TableFor %s failed: %s", fv0.Type().String(), err.Error())
+			return
 		}
 
 		// Get the primaty key for this detail table
 		// Use the first PK found, multiple PKs are not supported
 		// by now and will yield an error
-		detailPkId, _, err := m.GetPrimaryKey(detailtable, fv0)
+		var detailPkId uint64
+		detailPkId, _, err = m.GetPrimaryKey(*detailtable, fv0)
+		if err != nil {
+			err = errors.New("GetPrimaryKey in UpdateDetailsFromSlice failed: " + err.Error())
+			return
+		}
 
 		// Check if the foreign key of the detail matches with the primary key of the master table
 		if fd.Uint() == PK {
@@ -3031,25 +3144,68 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 			} else if fd.Kind() == reflect.Int32 || fd.Kind() == reflect.Int64 {
 				fd.SetInt(int64(PK))
 			} else {
-				return errors.New("UpdateDetailsFromSlice failed: Unable to get ForeignKey: " + fd.Kind().String())
+				err = errors.New("UpdateDetailsFromSlice failed: Unable to get ForeignKey: " + fd.Kind().String())
+				return
 			}
 
 		}
 		if detailPkId == 0 {
+
 			err = m.Insert(fv0)
+
+			if err != nil {
+				err = errors.New("InsertFromSlice insert failed: " + err.Error())
+				return
+			}
+			icount++
+
 		} else {
 			var affected int64
 			affected, err = m.Update(fv0)
-			if affected == 0 {
-				return errors.New(fmt.Sprintf("UpdateDetailsFromSlice failed: Update failed for detailPkId: %d\n", detailPkId))
+			if err != nil {
+				err = errors.New(fmt.Sprintf("UpdateDetailsFromSlice failed for detailPkId: %d: %s", detailPkId, err.Error()))
+				return
 			}
+			if affected == 0 {
+				err = errors.New(fmt.Sprintf("UpdateDetailsFromSlice affected 0 records for detailPkId: %d\n", detailPkId))
+				return
+			}
+			ucount += affected
 		}
-		if err != nil {
-			return errors.New("InsertFromSlice insert failed: " + err.Error())
-		}
+
 	}
 
-	return err
+	return
+}
+
+func checkForNotNull(elem reflect.Value, col *ColumnMap) (err error) {
+	var isNull bool
+	if col.EnforceNotNull && col.isNotNull {
+		val := elem.FieldByName(col.fieldName)
+		if val.Kind() == reflect.String {
+			valstring := val.String()
+			// DEBUG
+			if valstring == "" {
+				isNull = true
+			}
+		} else if val.Kind() == reflect.Int || val.Kind() == reflect.Int8 || val.Kind() == reflect.Int16 ||
+			val.Kind() == reflect.Int32 || val.Kind() == reflect.Int64 {
+			valint := val.Int()
+			if valint == 0 {
+				isNull = true
+			}
+		} else if val.Kind() == reflect.Uint || val.Kind() == reflect.Uint8 || val.Kind() == reflect.Uint16 ||
+			val.Kind() == reflect.Uint32 || val.Kind() == reflect.Uint64 {
+			valint := val.Uint()
+			if valint == 0 {
+				isNull = true
+			}
+		}
+	}
+	if isNull {
+		err = errors.New(fmt.Sprintf("Trying to insert a zero value into field '%s', which is NOT NULL and EnforceNotNull is true", col.ColumnName))
+	}
+	return
 }
 
 func lockError(m *DbMap, exec SqlExecutor, tableName string,
