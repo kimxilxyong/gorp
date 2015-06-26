@@ -3,12 +3,47 @@
 This is a fork of http://github.com/go-gorp/gorp
 The purpose of this fork is to implement automatic index generation from tags or from go code and support for detail/child tables.
 
+Status is: Ready for test.
+
+
 How to get it:
 ```
 go get github.com/kimxilxyong/gorp
 ```
 
-A new feature has been added as of 2015.06.17:
+New feature added as of 2015.06.26:
+
+* Support for enforcing NOT NULL columns on fields with the tag: enforcenotnull
+
+If a zero go variable is to be inserted/updated into a NOT NULL column an error is returned.
+If using the enforcenotnull tag the column is set to NOT NULL automatically on table creation.
+Datatypes string, int(8-64) and uint(8-64) are supported.
+Error returned is:
+```go
+err = errors.New(fmt.Sprintf("Trying to insert a zero value into field '%s', which is NOT NULL and EnforceNotNull is true", col.ColumnName))
+```
+
+* Support for multiple indexes on one field
+
+You can set more than one index on one field, thats useful if you have indexes spanning more than one field
+
+
+```go
+// example struct for tag enforcenotnull on column WebCommentId and multiple indexes on field PostId
+type Comment struct {
+	Id            uint64    `db:"notnull, primarykey, autoincrement"`
+	PostId        uint64    `db:"notnull, index:idx_foreign_key_postid, uniqueindex:idx_webcomment"` // points to post.id
+	WebCommentId  string    `db:"enforcenotnull, size:32, uniqueindex:idx_webcomment"`
+	CommentDate   time.Time `db:"notnull"`
+	User          string    `db:"size:64"`
+	Title         string    `db:"size:256"`
+	Body          string    `db:"name:CommentBody, size:16384"`
+	ParseComplete bool      `db:"-"` // ignore this field when storing with gorp
+	Err           error     `db:"-"` // ignore this field when storing with gorp
+}
+```
+
+New feature added as of 2015.06.17:
 
 * Support for detail tables
 
@@ -38,7 +73,7 @@ type Comment struct {
 	Title         string    `db:"size:256"`
 }
 
-New functions:
+New detail/child functions example:
 
 for i < 10 {
 	p := post.NewPost()
