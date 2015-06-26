@@ -201,6 +201,7 @@ type DbMap struct {
 	logPrefix string
 
 	DebugLevel int
+	LastOpInfo CRUDInfo // info about the last operation on this database
 }
 
 // TableMap represents a mapping between a Go struct and a database table
@@ -213,7 +214,6 @@ type TableMap struct {
 	Columns        []*ColumnMap
 	Indexes        []*IndexMap    // list of indexes for this table
 	Relations      []*RelationMap // list of detail/child tables for this table
-	LastOpInfo     CRUDInfo       // info about the last operation on this table
 	keys           []*ColumnMap
 	uniqueTogether [][]string
 	version        *ColumnMap
@@ -1030,61 +1030,63 @@ func (m *DbMap) addIndexForColumn(cm *ColumnMap, tag reflect.StructTag, tm Table
 	// Parse all field tags into a GorpParsedTag
 	pt := m.ParseTag(tag)
 
-	if pt.IndexName == "" {
-		// No index tag found, early return
-		return indexes
-	}
+	for _, it := range pt.Indexes {
 
-	var im *IndexMap
+		if it.IndexName == "" {
+			// No index tag found, early return
+			continue
+		}
 
-	// Get all params from tagstring
-	if pt.IndexName == autoGenerateIndexname {
-		// Index name not set, create one from the tablename + fieldname
-		// The table name is necessary for postgres, as the indexnames are global inside one schema
-		pt.IndexName = "ix_gorp_autoindex_" + strings.ToLower(tm.TableName) + "_" + strings.ToLower(cm.fieldName)
-	}
-	shouldAppend = true
+		var im *IndexMap
 
-	fn := cm.ColumnName
-	if fn == "" {
-		fn = cm.fieldName
-	}
-	if fn == "" {
-		// Unknown fieldname
-		panic("func addIndexForColumn: No columnname found for index " + pt.IndexName)
-		return indexes
-	}
+		// Get all params from tagstring
+		if it.IndexName == autoGenerateIndexname {
+			// Index name not set, create one from the tablename + fieldname
+			// The table name is necessary for postgres, as the indexnames are global inside one schema
+			it.IndexName = "ix_gorp_autoindex_" + strings.ToLower(tm.TableName) + "_" + strings.ToLower(cm.fieldName)
+		}
+		shouldAppend = true
 
-	// Check if indexName already exists in array of IndexMaps
-	for _, im = range indexes {
-		if im.IndexName == pt.IndexName {
-			im.fieldNames = append(im.fieldNames, fn)
-			shouldAppend = false
-
-			if m.DebugLevel > 3 {
-				fmt.Println("addIndexForColumn append: index: " + pt.IndexName + " field: cm.fieldName: " + cm.fieldName)
-				fmt.Println("addIndexForColumn append: index: " + pt.IndexName + " field: cm.ColumnName: " + cm.ColumnName)
-			}
+		fn := cm.ColumnName
+		if fn == "" {
+			fn = cm.fieldName
+		}
+		if fn == "" {
+			// Unknown fieldname
+			panic("func addIndexForColumn: No columnname found for index " + it.IndexName)
 			break
 		}
-	}
 
-	// Index not found, append it to array of IndexMaps
-	if shouldAppend {
+		// Check if indexName already exists in array of IndexMaps
+		for _, im = range indexes {
+			if im.IndexName == it.IndexName {
+				im.fieldNames = append(im.fieldNames, fn)
+				shouldAppend = false
 
-		im = &IndexMap{
-			IndexName:  pt.IndexName,
-			Unique:     pt.IsIndexUnique,
-			fieldNames: []string{fn},
+				if m.DebugLevel > 3 {
+					fmt.Println("addIndexForColumn append: index: " + it.IndexName + " field: cm.fieldName: " + cm.fieldName)
+					fmt.Println("addIndexForColumn append: index: " + it.IndexName + " field: cm.ColumnName: " + cm.ColumnName)
+				}
+				break
+			}
 		}
-		indexes = append(indexes, im)
 
-		if m.DebugLevel > 3 {
-			fmt.Println("addIndexForColumn new: index: " + pt.IndexName + " field: cm.fieldName: " + cm.fieldName)
-			fmt.Println("addIndexForColumn new: index: " + pt.IndexName + " field: cm.ColumnName: " + cm.ColumnName)
+		// Index not found, append it to array of IndexMaps
+		if shouldAppend {
+
+			im = &IndexMap{
+				IndexName:  it.IndexName,
+				Unique:     it.IsIndexUnique,
+				fieldNames: []string{fn},
+			}
+			indexes = append(indexes, im)
+
+			if m.DebugLevel > 3 {
+				fmt.Println("addIndexForColumn new: index: " + it.IndexName + " field: cm.fieldName: " + cm.fieldName)
+				fmt.Println("addIndexForColumn new: index: " + it.IndexName + " field: cm.ColumnName: " + cm.ColumnName)
+			}
 		}
 	}
-
 	return indexes
 }
 
@@ -1824,13 +1826,11 @@ func argsString(args ...interface{}) string {
 	return margs
 }
 
-///////////////
-
+// GorpParsedTag contains info about a column parsed from a tag
 type GorpParsedTag struct {
 	ColumnName     string
 	IsFieldUnique  bool
-	IndexName      string
-	IsIndexUnique  bool
+	Indexes        []GorpParsedIndexTag
 	MaxColumnSize  int
 	IsNotNull      bool
 	EnforceNotNull bool
@@ -1838,6 +1838,14 @@ type GorpParsedTag struct {
 	IsPk           bool
 	Transient      bool
 	ForeignKey     string
+}
+
+// GorpParsedIndexTag contains index info parsed from a tag
+type GorpParsedIndexTag struct {
+	ColumnName    string
+	IndexName     string
+	IsIndexUnique bool
+	ForeignKey    string
 }
 
 // ParseTag extracts all field tags from input param tag and resturns all found options
@@ -1892,17 +1900,21 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 			case "name":
 				pt.ColumnName = strings.Trim(o[1], " ")
 			case "index":
-				pt.IndexName = strings.Trim(o[1], " ")
-				if pt.IndexName == "" {
-					pt.IndexName = autoGenerateIndexname
+				it := GorpParsedIndexTag{}
+				it.IndexName = strings.Trim(o[1], " ")
+				if it.IndexName == "" {
+					it.IndexName = autoGenerateIndexname
 				}
-				pt.IsIndexUnique = false
+				it.IsIndexUnique = false
+				pt.Indexes = append(pt.Indexes, it)
 			case "uniqueindex":
-				pt.IndexName = strings.Trim(o[1], " ")
-				if pt.IndexName == "" {
-					pt.IndexName = autoGenerateIndexname
+				it := GorpParsedIndexTag{}
+				it.IndexName = strings.Trim(o[1], " ")
+				if it.IndexName == "" {
+					it.IndexName = autoGenerateIndexname
 				}
-				pt.IsIndexUnique = true
+				it.IsIndexUnique = true
+				pt.Indexes = append(pt.Indexes, it)
 			case "size":
 				pt.MaxColumnSize, _ = strconv.Atoi(o[1])
 			case "notnull":
@@ -2854,9 +2866,9 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 
 		count += rows
 		// Store info about this update operation
-		table.LastOpInfo.Type = Update
-		table.LastOpInfo.BindPlanUsed = &table.updatePlan
-		table.LastOpInfo.RowCount = count
+		m.LastOpInfo.Type = Update
+		m.LastOpInfo.BindPlanUsed = &table.updatePlan
+		m.LastOpInfo.RowCount = count
 
 		if updateChilds {
 			// Get the primaty key for this table
@@ -2877,8 +2889,8 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 					if err != nil {
 						return count, errors.New("Update child relation on table '" + r.DetailTable.TableName + "' failed: " + err.Error())
 					}
-					table.LastOpInfo.ChildUpdateRowCount += updatecount
-					table.LastOpInfo.ChildInsertRowCount += insertcount
+					m.LastOpInfo.ChildUpdateRowCount += updatecount
+					m.LastOpInfo.ChildInsertRowCount += insertcount
 				}
 			}
 		}
@@ -3002,9 +3014,9 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 		}
 
 		// Store info about this update operation
-		table.LastOpInfo.Type = Insert
-		table.LastOpInfo.BindPlanUsed = &table.insertPlan
-		table.LastOpInfo.RowCount++
+		m.LastOpInfo.Type = Insert
+		m.LastOpInfo.BindPlanUsed = &table.insertPlan
+		m.LastOpInfo.RowCount++
 
 		if insertChilds {
 			// Get the primaty key for this table
@@ -3027,8 +3039,7 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 						return errors.New("Insert child relation into table '" + r.DetailTable.TableName + "' failed: " + err.Error())
 
 					}
-					table.LastOpInfo.ChildInsertRowCount += count
-					table.LastOpInfo.RowCount -= count
+					m.LastOpInfo.ChildInsertRowCount += count
 				}
 
 			}
@@ -3056,6 +3067,13 @@ func (m *DbMap) InsertDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 	if fv.Kind() != reflect.Slice {
 		return 0, fmt.Errorf("InsertFromSlice failed because Field '%s' in '%s' is not of type slice\n", r.MasterFieldName, elem.String())
 	}
+
+	// Buffer the rowcount info struct
+	bufferLastOpInfo := m.LastOpInfo
+	defer func() {
+		m.LastOpInfo = bufferLastOpInfo
+	}()
+
 	for sliceIndex := 0; sliceIndex < fv.Len(); sliceIndex++ {
 
 		fv0 := fv.Index(sliceIndex)
@@ -3097,6 +3115,13 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 		err = fmt.Errorf("UpdateDetailsFromSlice failed because Field '%s' in '%s' is not of type slice\n", r.MasterFieldName, elem.String())
 		return
 	}
+
+	// Buffer the rowcount info struct
+	bufferLastOpInfo := m.LastOpInfo
+	defer func() {
+		m.LastOpInfo = bufferLastOpInfo
+	}()
+
 	for sliceIndex := 0; sliceIndex < fv.Len(); sliceIndex++ {
 
 		fv0 := fv.Index(sliceIndex)
