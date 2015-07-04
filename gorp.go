@@ -490,7 +490,7 @@ func (t *TableMap) bindInsert(elem reflect.Value) (bindInstance, error) {
 							plan.argFields = append(plan.argFields, versFieldConst)
 						} else {
 							// Check if this column is a NOT NULL
-							if err := checkForNotNull(elem, col); err != nil {
+							if err := checkForNotNull(elem, col, t); err != nil {
 								return bindInstance{}, err
 							}
 							plan.argFields = append(plan.argFields, col.fieldName)
@@ -543,7 +543,7 @@ func (t *TableMap) bindUpdate(elem reflect.Value) (bindInstance, error) {
 					plan.argFields = append(plan.argFields, versFieldConst)
 				} else {
 					// Check if this column is a NOT NULL
-					if err := checkForNotNull(elem, col); err != nil {
+					if err := checkForNotNull(elem, col, t); err != nil {
 						return bindInstance{}, err
 					}
 					plan.argFields = append(plan.argFields, col.fieldName)
@@ -687,6 +687,9 @@ type ColumnMap struct {
 	// Passed to Dialect.ToSqlType() to assist in informing the
 	// correct column type to map to in CreateTables()
 	MaxSize int
+
+	//DbType overrides the conversion from go types to dab types
+	DbType string
 
 	// If EnforceNotNull is true then an error will be generated if
 	// a zero value for this coumn is inserted/updated into a table
@@ -973,6 +976,7 @@ func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnM
 				fieldName:      f.Name,
 				gotype:         gotype,
 				MaxSize:        pt.MaxColumnSize,
+				DbType:         pt.DbType,
 				isNotNull:      pt.IsNotNull,
 				EnforceNotNull: pt.EnforceNotNull,
 				Unique:         pt.IsFieldUnique,
@@ -1137,7 +1141,11 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 				if x > 0 {
 					s.WriteString(", ")
 				}
-				stype := m.Dialect.ToSqlType(col.gotype, col.MaxSize, col.isAutoIncr)
+				// Check if the db type has been overriden
+				stype := col.DbType
+				if stype == "" {
+					stype = m.Dialect.ToSqlType(col.gotype, col.MaxSize, col.isAutoIncr)
+				}
 				s.WriteString(fmt.Sprintf("%s %s", m.Dialect.QuoteField(col.ColumnName), stype))
 
 				if col.isPK || col.isNotNull {
@@ -1832,12 +1840,18 @@ type GorpParsedTag struct {
 	IsFieldUnique  bool
 	Indexes        []GorpParsedIndexTag
 	MaxColumnSize  int
+	DbType         string
 	IsNotNull      bool
 	EnforceNotNull bool
 	IsAutoIncr     bool
 	IsPk           bool
 	Transient      bool
 	ForeignKey     string
+}
+
+func (pt GorpParsedTag) String() string {
+	return "ColumnName " + pt.ColumnName + "\n" +
+		"DbType " + pt.DbType + "\n"
 }
 
 // GorpParsedIndexTag contains index info parsed from a tag
@@ -1858,13 +1872,13 @@ type Post struct {
 	Site         string    `db:"name: PostSite, notnull, size:50, index:idx_site"`
 	PostId       string    `db:"notnull, size:32, unique"`
 	Score        int       `db:"notnull"`
-	Title        string    `db:"notnull"`
+	Title        string    `db:"notnull, size:1024"`
 	Url          string    `db:"notnull"`
 	User         string    `db:"index:idx_user, size:64"`
 	PostSub      string    `db:"index:idx_user, size:128"`
 	UserIP       string    `db:"notnull, size:16"`
 	BodyType     string    `db:"notnull, size:64"`
-	Body         string    `db:"name:PostBody, size:16384"`
+	Body         string    `db:"name:PostBody, type:mediumtext"`
 	Err          error     `db:"-"` // ignore this field when storing with gorp
 }
 */
@@ -1917,6 +1931,8 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 				pt.Indexes = append(pt.Indexes, it)
 			case "size":
 				pt.MaxColumnSize, _ = strconv.Atoi(o[1])
+			case "type":
+				pt.DbType = strings.Trim(o[1], " ")
 			case "notnull":
 				pt.IsNotNull = true
 			case "enforcenotnull":
@@ -1942,6 +1958,7 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 			}
 		}
 	}
+
 	return
 }
 
@@ -2847,7 +2864,7 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 
 		res, err := exec.Exec(bi.query, bi.args...)
 		if err != nil {
-			return -1, err
+			return -1, fmt.Errorf("gorp: update failed for table '%s': %s", table.TableName, err.Error())
 		}
 
 		rows, err := res.RowsAffected()
@@ -2988,7 +3005,7 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 			case IntegerAutoIncrInserter:
 				id, err := inserter.InsertAutoIncr(exec, bi.query, bi.args...)
 				if err != nil {
-					return err
+					return fmt.Errorf("gorp: insert failed for table '%s': %s", table.TableName, err.Error())
 				}
 				k := f.Kind()
 				if (k == reflect.Int) || (k == reflect.Int16) || (k == reflect.Int32) || (k == reflect.Int64) {
@@ -3001,7 +3018,7 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 			case TargetedAutoIncrInserter:
 				err := inserter.InsertAutoIncrToTarget(exec, bi.query, f.Addr().Interface(), bi.args...)
 				if err != nil {
-					return err
+					return fmt.Errorf("gorp: insert failed for table '%s': %s", table.TableName, err.Error())
 				}
 			default:
 				return fmt.Errorf("gorp: Cannot use autoincrement fields on dialects that do not implement an autoincrementing interface")
@@ -3009,7 +3026,7 @@ func insert(m *DbMap, exec SqlExecutor, insertChilds bool, list ...interface{}) 
 		} else {
 			_, err := exec.Exec(bi.query, bi.args...)
 			if err != nil {
-				return err
+				return fmt.Errorf("gorp: Exec failed: %s", err.Error())
 			}
 		}
 
@@ -3160,7 +3177,7 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 			}
 		} else {
 
-			if m.DebugLevel > 2 {
+			if m.DebugLevel > 3 {
 				fmt.Printf("r.ForeignKeyFieldName %s does not match: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
 			}
 
@@ -3170,7 +3187,7 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 			} else if fd.Kind() == reflect.Int32 || fd.Kind() == reflect.Int64 {
 				fd.SetInt(int64(PK))
 			} else {
-				err = errors.New("UpdateDetailsFromSlice failed: Unable to get ForeignKey: " + fd.Kind().String())
+				err = errors.New(fmt.Sprintf("UpdateDetailsFromSlice failed: ForeignKey '%s' has incorrect type: '%s'", r.ForeignKeyFieldName, fd.Kind().String()))
 				return
 			}
 
@@ -3204,7 +3221,7 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 	return
 }
 
-func checkForNotNull(elem reflect.Value, col *ColumnMap) (err error) {
+func checkForNotNull(elem reflect.Value, col *ColumnMap, table *TableMap) (err error) {
 	var isNull bool
 	if col.EnforceNotNull && col.isNotNull {
 		val := elem.FieldByName(col.fieldName)
@@ -3229,7 +3246,7 @@ func checkForNotNull(elem reflect.Value, col *ColumnMap) (err error) {
 		}
 	}
 	if isNull {
-		err = errors.New(fmt.Sprintf("Trying to insert a zero value into field '%s', which is NOT NULL and EnforceNotNull is true", col.ColumnName))
+		err = errors.New(fmt.Sprintf("Trying to insert a zero value into field '%s.%s', which is NOT NULL and EnforceNotNull is true", table.TableName, col.ColumnName))
 	}
 	return
 }

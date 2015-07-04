@@ -268,11 +268,10 @@ func (d PostgresDialect) ToSqlType(val reflect.Type, maxsize int, isAutoIncr boo
 		return "timestamp with time zone"
 	}
 
-	if maxsize > 0 {
-		return fmt.Sprintf("varchar(%d)", maxsize)
-	} else {
-		return "text"
+	if maxsize < 1 {
+		maxsize = 255
 	}
+	return fmt.Sprintf("varchar(%d)", maxsize)
 }
 
 // Returns empty string
