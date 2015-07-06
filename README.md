@@ -122,6 +122,7 @@ If you want to run the unit tests:
 github.com\kimxilxyong\gorp> test_all.bat
 ```
 
+<<<<<<< HEAD
 Tested with MySQL and PostgreSQL. Other databases are not supported currently.
 
 Please note:
@@ -130,6 +131,23 @@ The following part of the readme is from the original gorp:
 
 # Go Relational Persistence
 ## Original Readme from http://github.com/go-gorp/gorp
+=======
+### Update 2015-07-01 Cleanup & feature freeze ([#270](https://github.com/go-gorp/gorp/issues/270))
+
+We are currently cleaning up the backlog of issues and PR's. When this is done the codebase will be split into separate files and there will be breaking changes to the API's. We're also adding better tests and documentation. As a result of these changes the `master` branch will be unstable. Please use `gopkg.in/gorp.v1`. When the cleanup and changes are done, we will release `v2.0`.
+
+At this time we won't accept new feature-related pull-requests because of changes to the codebase. Please create an issue for your feature and wait until `v2.0` has been released.
+
+For more information, please read [#270](https://github.com/go-gorp/gorp/issues/270).
+
+## Introduction
+
+I hesitate to call gorp an ORM.  Go doesn't really have objects, at least
+not in the classic Smalltalk/Java sense.  There goes the "O".  gorp doesn't
+know anything about the relationships between your structs (at least not
+yet).  So the "R" is questionable too (but I use it in the name because,
+well, it seemed more clever).
+>>>>>>> upstream/master
 
 The "M" is alive and well.  Given some Go structs and a database, gorp
 should remove a fair amount of boilerplate busy-work from your code.
@@ -157,7 +175,7 @@ not infrastructure.
 
     # install the library:
     go get gopkg.in/gorp.v1
-    
+
     // use in your .go code:
     import (
         "gopkg.in/gorp.v1"
@@ -324,7 +342,7 @@ type Invoice struct {
 }
 
 type Person struct {
-    Id      int64    
+    Id      int64
     Created int64
     Updated int64
     FName   string
@@ -344,8 +362,10 @@ type Person struct {
 //   table.ColMap("Price").Rename("unit_price")
 //   table.ColMap("IgnoreMe").SetTransient(true)
 //
+// You can optionally declare the field to be a primary key and/or autoincrement
+//
 type Product struct {
-    Id         int64     `db:"product_id"`
+    Id         int64     `db:"product_id, primarykey, autoincrement"`
     Price      int64     `db:"unit_price"`
     IgnoreMe   string    `db:"-"`
 }
@@ -362,7 +382,7 @@ db, err := sql.Open("mymysql", "tcp:localhost:3306*mydb/myuser/mypassword")
 dbmap := &gorp.DbMap{Db: db, Dialect: gorp.MySQLDialect{"InnoDB", "UTF8"}}
 
 // register the structs you wish to use with gorp
-// you can also use the shorter dbmap.AddTable() if you 
+// you can also use the shorter dbmap.AddTable() if you
 // don't want to override the table name
 //
 // SetKeys(true) means we have a auto increment primary key, which
@@ -371,16 +391,391 @@ dbmap := &gorp.DbMap{Db: db, Dialect: gorp.MySQLDialect{"InnoDB", "UTF8"}}
 t1 := dbmap.AddTableWithName(Invoice{}, "invoice_test").SetKeys(true, "Id")
 t2 := dbmap.AddTableWithName(Person{}, "person_test").SetKeys(true, "Id")
 t3 := dbmap.AddTableWithName(Product{}, "product_test").SetKeys(true, "Id")
+<<<<<<< HEAD
 
+=======
+```
 
-Additionally, when using Postgres as your database, you should utilize `$1` instead 
-of `?` placeholders as utilizing `?` placeholders when querying Postgres will result 
-in `pq: operator does not exist` errors. Alternatively, use 
+### Struct Embedding
+
+gorp supports embedding structs.  For example:
+
+```go
+type Names struct {
+    FirstName string
+    LastName  string
+}
+
+type WithEmbeddedStruct struct {
+    Id int64
+    Names
+}
+
+es := &WithEmbeddedStruct{-1, Names{FirstName: "Alice", LastName: "Smith"}}
+err := dbmap.Insert(es)
+```
+
+See the `TestWithEmbeddedStruct` function in `gorp_test.go` for a full example.
+
+### Create/Drop Tables ###
+
+Automatically create / drop registered tables.  This is useful for unit tests
+but is entirely optional.  You can of course use gorp with tables created manually,
+or with a separate migration tool (like [goose](https://bitbucket.org/liamstask/goose) or [migrate](https://github.com/mattes/migrate)).
+
+```go
+// create all registered tables
+dbmap.CreateTables()
+
+// same as above, but uses "if not exists" clause to skip tables that are
+// already defined
+dbmap.CreateTablesIfNotExists()
+
+// drop
+dbmap.DropTables()
+```
+
+### SQL Logging
+
+Optionally you can pass in a logger to trace all SQL statements.
+I recommend enabling this initially while you're getting the feel for what
+gorp is doing on your behalf.
+
+Gorp defines a `GorpLogger` interface that Go's built in `log.Logger` satisfies.
+However, you can write your own `GorpLogger` implementation, or use a package such
+as `glog` if you want more control over how statements are logged.
+
+```go
+// Will log all SQL statements + args as they are run
+// The first arg is a string prefix to prepend to all log messages
+dbmap.TraceOn("[gorp]", log.New(os.Stdout, "myapp:", log.Lmicroseconds))
+
+// Turn off tracing
+dbmap.TraceOff()
+```
+
+### Insert
+
+```go
+// Must declare as pointers so optional callback hooks
+// can operate on your data, not copies
+inv1 := &Invoice{0, 100, 200, "first order", 0}
+inv2 := &Invoice{0, 100, 200, "second order", 0}
+
+// Insert your rows
+err := dbmap.Insert(inv1, inv2)
+
+// Because we called SetKeys(true) on Invoice, the Id field
+// will be populated after the Insert() automatically
+fmt.Printf("inv1.Id=%d  inv2.Id=%d\n", inv1.Id, inv2.Id)
+```
+
+### Update
+
+Continuing the above example, use the `Update` method to modify an Invoice:
+
+```go
+// count is the # of rows updated, which should be 1 in this example
+count, err := dbmap.Update(inv1)
+```
+
+### Delete
+
+If you have primary key(s) defined for a struct, you can use the `Delete`
+method to remove rows:
+
+```go
+count, err := dbmap.Delete(inv1)
+```
+
+### Select by Key
+
+Use the `Get` method to fetch a single row by primary key.  It returns
+nil if no row is found.
+
+```go
+// fetch Invoice with Id=99
+obj, err := dbmap.Get(Invoice{}, 99)
+inv := obj.(*Invoice)
+```
+
+### Ad Hoc SQL
+
+#### SELECT
+
+`Select()` and `SelectOne()` provide a simple way to bind arbitrary queries to a slice
+or a single struct.
+
+```go
+// Select a slice - first return value is not needed when a slice pointer is passed to Select()
+var posts []Post
+_, err := dbmap.Select(&posts, "select * from post order by id")
+
+// You can also use primitive types
+var ids []string
+_, err := dbmap.Select(&ids, "select id from post")
+
+// Select a single row.
+// Returns an error if no row found, or if more than one row is found
+var post Post
+err := dbmap.SelectOne(&post, "select * from post where id=?", id)
+```
+
+Want to do joins?  Just write the SQL and the struct. gorp will bind them:
+
+```go
+// Define a type for your join
+// It *must* contain all the columns in your SELECT statement
+//
+// The names here should match the aliased column names you specify
+// in your SQL - no additional binding work required.  simple.
+//
+type InvoicePersonView struct {
+    InvoiceId   int64
+    PersonId    int64
+    Memo        string
+    FName       string
+}
+
+// Create some rows
+p1 := &Person{0, 0, 0, "bob", "smith"}
+dbmap.Insert(p1)
+
+// notice how we can wire up p1.Id to the invoice easily
+inv1 := &Invoice{0, 0, 0, "xmas order", p1.Id}
+dbmap.Insert(inv1)
+
+// Run your query
+query := "select i.Id InvoiceId, p.Id PersonId, i.Memo, p.FName " +
+	"from invoice_test i, person_test p " +
+	"where i.PersonId = p.Id"
+
+// pass a slice to Select()
+var list []InvoicePersonView
+_, err := dbmap.Select(&list, query)
+
+// this should test true
+expected := InvoicePersonView{inv1.Id, p1.Id, inv1.Memo, p1.FName}
+if reflect.DeepEqual(list[0], expected) {
+    fmt.Println("Woot! My join worked!")
+}
+```
+
+#### SELECT string or int64
+
+gorp provides a few convenience methods for selecting a single string or int64.
+
+```go
+// select single int64 from db (use $1 instead of ? for postgresql)
+i64, err := dbmap.SelectInt("select count(*) from foo where blah=?", blahVal)
+
+// select single string from db:
+s, err := dbmap.SelectStr("select name from foo where blah=?", blahVal)
+
+```
+
+#### Named bind parameters
+
+You may use a map or struct to bind parameters by name.  This is currently
+only supported in SELECT queries.
+
+```go
+_, err := dbm.Select(&dest, "select * from Foo where name = :name and age = :age", map[string]interface{}{
+  "name": "Rob",
+  "age": 31,
+})
+```
+
+#### UPDATE / DELETE
+
+You can execute raw SQL if you wish.  Particularly good for batch operations.
+
+```go
+res, err := dbmap.Exec("delete from invoice_test where PersonId=?", 10)
+```
+
+### Transactions
+
+You can batch operations into a transaction:
+
+```go
+func InsertInv(dbmap *DbMap, inv *Invoice, per *Person) error {
+    // Start a new transaction
+    trans, err := dbmap.Begin()
+    if err != nil {
+        return err
+    }
+
+    trans.Insert(per)
+    inv.PersonId = per.Id
+    trans.Insert(inv)
+
+    // if the commit is successful, a nil error is returned
+    return trans.Commit()
+}
+```
+
+### Hooks
+
+Use hooks to update data before/after saving to the db. Good for timestamps:
+
+```go
+// implement the PreInsert and PreUpdate hooks
+func (i *Invoice) PreInsert(s gorp.SqlExecutor) error {
+    i.Created = time.Now().UnixNano()
+    i.Updated = i.Created
+    return nil
+}
+
+func (i *Invoice) PreUpdate(s gorp.SqlExecutor) error {
+    i.Updated = time.Now().UnixNano()
+    return nil
+}
+
+// You can use the SqlExecutor to cascade additional SQL
+// Take care to avoid cycles. gorp won't prevent them.
+//
+// Here's an example of a cascading delete
+//
+func (p *Person) PreDelete(s gorp.SqlExecutor) error {
+    query := "delete from invoice_test where PersonId=?"
+    err := s.Exec(query, p.Id); if err != nil {
+        return err
+    }
+    return nil
+}
+```
+
+Full list of hooks that you can implement:
+
+    PostGet
+    PreInsert
+    PostInsert
+    PreUpdate
+    PostUpdate
+    PreDelete
+    PostDelete
+
+    All have the same signature.  for example:
+
+    func (p *MyStruct) PostUpdate(s gorp.SqlExecutor) error
+
+### Optimistic Locking
+
+#### Note that this behaviour has changed in v2. See [Migration Guide](#migration-guide).
+
+gorp provides a simple optimistic locking feature, similar to Java's JPA, that
+will raise an error if you try to update/delete a row whose `version` column
+has a value different than the one in memory.  This provides a safe way to do
+"select then update" style operations without explicit read and write locks.
+
+```go
+// Version is an auto-incremented number, managed by gorp
+// If this property is present on your struct, update
+// operations will be constrained
+//
+// For example, say we defined Person as:
+
+type Person struct {
+    Id       int64
+    Created  int64
+    Updated  int64
+    FName    string
+    LName    string
+
+    // automatically used as the Version col
+    // use table.SetVersionCol("columnName") to map a different
+    // struct field as the version field
+    Version  int64
+}
+
+p1 := &Person{0, 0, 0, "Bob", "Smith", 0}
+dbmap.Insert(p1)  // Version is now 1
+
+obj, err := dbmap.Get(Person{}, p1.Id)
+p2 := obj.(*Person)
+p2.LName = "Edwards"
+dbmap.Update(p2)  // Version is now 2
+
+p1.LName = "Howard"
+
+// Raises error because p1.Version == 1, which is out of date
+count, err := dbmap.Update(p1)
+_, ok := err.(gorp.OptimisticLockError)
+if ok {
+    // should reach this statement
+
+    // in a real app you might reload the row and retry, or
+    // you might propegate this to the user, depending on the desired
+    // semantics
+    fmt.Printf("Tried to update row with stale data: %v\n", err)
+} else {
+    // some other db error occurred - log or return up the stack
+    fmt.Printf("Unknown db err: %v\n", err)
+}
+```
+
+## Database Drivers
+
+gorp uses the Go 1 `database/sql` package.  A full list of compliant drivers is available here:
+
+http://code.google.com/p/go-wiki/wiki/SQLDrivers
+
+Sadly, SQL databases differ on various issues. gorp provides a Dialect interface that should be
+implemented per database vendor.  Dialects are provided for:
+
+* MySQL
+* PostgreSQL
+* sqlite3
+
+Each of these three databases pass the test suite.  See `gorp_test.go` for example
+DSNs for these three databases.
+
+Support is also provided for:
+
+* Oracle (contributed by @klaidliadon)
+* SQL Server (contributed by @qrawl) - use driver: github.com/denisenkom/go-mssqldb
+
+Note that these databases are not covered by CI and I (@coopernurse) have no good way to
+test them locally.  So please try them and send patches as needed, but expect a bit more
+unpredicability.
+
+## Known Issues
+
+### SQL placeholder portability
+
+Different databases use different strings to indicate variable placeholders in
+prepared SQL statements.  Unlike some database abstraction layers (such as JDBC),
+Go's `database/sql` does not standardize this.
+
+SQL generated by gorp in the `Insert`, `Update`, `Delete`, and `Get` methods delegates
+to a Dialect implementation for each database, and will generate portable SQL.
+
+Raw SQL strings passed to `Exec`, `Select`, `SelectOne`, `SelectInt`, etc will not be
+parsed.  Consequently you may have portability issues if you write a query like this:
+
+```go
+// works on MySQL and Sqlite3, but not with Postgresql
+err := dbmap.SelectOne(&val, "select * from foo where id = ?", 30)
+```
+
+In `Select` and `SelectOne` you can use named parameters to work around this.
+The following is portable:
+
+```go
+err := dbmap.SelectOne(&val, "select * from foo where id = :id",
+   map[string]interface{} { "id": 30})
+```
+>>>>>>> upstream/master
+
+Additionally, when using Postgres as your database, you should utilize `$1` instead
+of `?` placeholders as utilizing `?` placeholders when querying Postgres will result
+in `pq: operator does not exist` errors. Alternatively, use
 `dbMap.Dialect.BindVar(varIdx)` to get the proper variable binding for your dialect.
 
 ### time.Time and time zones
 
-gorp will pass `time.Time` fields through to the `database/sql` driver, but note that 
+gorp will pass `time.Time` fields through to the `database/sql` driver, but note that
 the behavior of this type varies across database drivers.
 
 MySQL users should be especially cautious.  See: https://github.com/ziutek/mymysql/pull/77

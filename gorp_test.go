@@ -72,7 +72,7 @@ func (me *Invoice) Rand() {
 }
 
 type InvoiceTag struct {
-	Id       int64 `db:"myid"`
+	Id       int64 `db:"myid, primarykey, autoincrement"`
 	Created  int64 `db:"myCreated"`
 	Updated  int64 `db:"date_updated"`
 	Memo     string
@@ -209,6 +209,17 @@ type WithEmbeddedStruct struct {
 	Names
 }
 
+type WithEmbeddedStructConflictingEmbeddedMemberNames struct {
+	Id int64
+	Names
+	NamesConflict
+}
+
+type WithEmbeddedStructSameMemberName struct {
+	Id int64
+	SameName
+}
+
 type WithEmbeddedStructBeforeAutoincrField struct {
 	Names
 	Id int64
@@ -222,6 +233,15 @@ type WithEmbeddedAutoincr struct {
 type Names struct {
 	FirstName string
 	LastName  string
+}
+
+type NamesConflict struct {
+	FirstName string
+	Surname string
+}
+
+type SameName struct {
+	SameName string
 }
 
 type UniqueColumns struct {
@@ -1299,6 +1319,60 @@ func TestWithEmbeddedStruct(t *testing.T) {
 	}
 }
 
+/*
+func TestWithEmbeddedStructConflictingEmbeddedMemberNames(t *testing.T) {
+	dbmap := initDbMap()
+	defer dropAndClose(dbmap)
+
+	es := &WithEmbeddedStructConflictingEmbeddedMemberNames{-1, Names{FirstName: "Alice", LastName: "Smith"}, NamesConflict{FirstName: "Andrew", Surname: "Wiggin"}}
+	_insert(dbmap, es)
+	expected := &WithEmbeddedStructConflictingEmbeddedMemberNames{-1, Names{FirstName: "Alice", LastName: "Smith"}, NamesConflict{FirstName: "Andrew", Surname: "Wiggin"}}
+	es2 := _get(dbmap, WithEmbeddedStructConflictingEmbeddedMemberNames{}, es.Id).(*WithEmbeddedStructConflictingEmbeddedMemberNames)
+	if !reflect.DeepEqual(expected, es2) {
+		t.Errorf("%v != %v", expected, es2)
+	}
+
+	es2.Names.FirstName = "Bob"
+	expected.Names.FirstName = "Bob"
+	_update(dbmap, es2)
+	es2 = _get(dbmap, WithEmbeddedStructConflictingEmbeddedMemberNames{}, es.Id).(*WithEmbeddedStructConflictingEmbeddedMemberNames)
+	if !reflect.DeepEqual(expected, es2) {
+		t.Errorf("%v != %v", expected, es2)
+	}
+
+	ess := _rawselect(dbmap, WithEmbeddedStructConflictingEmbeddedMemberNames{}, "select * from embedded_struct_conflict_name_test")
+	if !reflect.DeepEqual(es2, ess[0]) {
+		t.Errorf("%v != %v", es2, ess[0])
+	}
+}
+
+func TestWithEmbeddedStructSameMemberName(t *testing.T) {
+	dbmap := initDbMap()
+	defer dropAndClose(dbmap)
+
+	es := &WithEmbeddedStructSameMemberName{-1, SameName{SameName: "Alice"}}
+	_insert(dbmap, es)
+	expected := &WithEmbeddedStructSameMemberName{-1, SameName{SameName: "Alice"}}
+	es2 := _get(dbmap, WithEmbeddedStructSameMemberName{}, es.Id).(*WithEmbeddedStructSameMemberName)
+	if !reflect.DeepEqual(expected, es2) {
+		t.Errorf("%v != %v", expected, es2)
+	}
+
+	es2.SameName = SameName{"Bob"}
+	expected.SameName = SameName{"Bob"}
+	_update(dbmap, es2)
+	es2 = _get(dbmap, WithEmbeddedStructSameMemberName{}, es.Id).(*WithEmbeddedStructSameMemberName)
+	if !reflect.DeepEqual(expected, es2) {
+		t.Errorf("%v != %v", expected, es2)
+	}
+
+	ess := _rawselect(dbmap, WithEmbeddedStructSameMemberName{}, "select * from embedded_struct_same_member_name_test")
+	if !reflect.DeepEqual(es2, ess[0]) {
+		t.Errorf("%v != %v", es2, ess[0])
+	}
+}
+//*/
+
 func TestWithEmbeddedStructBeforeAutoincr(t *testing.T) {
 	dbmap := initDbMap()
 	defer dropAndClose(dbmap)
@@ -2067,7 +2141,7 @@ func initDbMapBench() *DbMap {
 func initDbMap() *DbMap {
 	dbmap := newDbMap()
 	dbmap.AddTableWithName(Invoice{}, "invoice_test").SetKeys(true, "Id")
-	dbmap.AddTableWithName(InvoiceTag{}, "invoice_tag_test").SetKeys(true, "myid")
+	dbmap.AddTableWithName(InvoiceTag{}, "invoice_tag_test")    //key is set via primarykey attribute
 	dbmap.AddTableWithName(AliasTransientField{}, "alias_trans_field_test").SetKeys(true, "id")
 	dbmap.AddTableWithName(OverriddenInvoice{}, "invoice_override_test").SetKeys(false, "Id")
 	dbmap.AddTableWithName(Person{}, "person_test").SetKeys(true, "Id").SetVersionCol("Version")
@@ -2075,6 +2149,8 @@ func initDbMap() *DbMap {
 	dbmap.AddTableWithName(IdCreated{}, "id_created_test").SetKeys(true, "Id")
 	dbmap.AddTableWithName(TypeConversionExample{}, "type_conv_test").SetKeys(true, "Id")
 	dbmap.AddTableWithName(WithEmbeddedStruct{}, "embedded_struct_test").SetKeys(true, "Id")
+	//dbmap.AddTableWithName(WithEmbeddedStructConflictingEmbeddedMemberNames{}, "embedded_struct_conflict_name_test").SetKeys(true, "Id")
+	//dbmap.AddTableWithName(WithEmbeddedStructSameMemberName{}, "embedded_struct_same_member_name_test").SetKeys(true, "Id")
 	dbmap.AddTableWithName(WithEmbeddedStructBeforeAutoincrField{}, "embedded_struct_before_autoincr_test").SetKeys(true, "Id")
 	dbmap.AddTableWithName(WithEmbeddedAutoincr{}, "embedded_autoincr_test").SetKeys(true, "Id")
 	dbmap.AddTableWithName(WithTime{}, "time_test").SetKeys(true, "Id")
