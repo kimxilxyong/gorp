@@ -571,15 +571,13 @@ func (t *TableMap) bindInsert(elem reflect.Value) (bindInstance, error) {
 							}
 							x++
 						} else {
-<<<<<<< HEAD
+
 							// Check if this column is a NOT NULL
 							if err := checkForNotNull(elem, col, t); err != nil {
 								return bindInstance{}, err
 							}
 							plan.argFields = append(plan.argFields, col.fieldName)
-=======
 							s2.WriteString(col.DefaultValue)
->>>>>>> upstream/master
 						}
 					}
 					first = false
@@ -772,16 +770,14 @@ type ColumnMap struct {
 	// correct column type to map to in CreateTables()
 	MaxSize int
 
-<<<<<<< HEAD
 	//DbType overrides the conversion from go types to dab types
 	DbType string
 
 	// If EnforceNotNull is true then an error will be generated if
 	// a zero value for this coumn is inserted/updated into a table
 	EnforceNotNull bool
-=======
+
 	DefaultValue string
->>>>>>> upstream/master
 
 	fieldName  string
 	gotype     reflect.Type
@@ -963,7 +959,7 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 	}
 
 	tmap := &TableMap{gotype: t, TableName: name, SchemaName: schema, dbmap: m}
-<<<<<<< HEAD
+
 	tmap.Columns = m.readStructColumns(t, tmap)
 
 	m.tables = append(m.tables, tmap)
@@ -974,38 +970,22 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 				fmt.Printf("tm.Indexes %d: indexname %s, field %d: %s\n", i, testim.IndexName, x, testfn)
 			}
 		}
-=======
-	var primaryKey []*ColumnMap = nil
-	tmap.Columns, primaryKey = m.readStructColumns(t)
-	m.tables = append(m.tables, tmap)
-	if len(primaryKey) > 0 {
-		tmap.keys = append(tmap.keys, primaryKey...)
->>>>>>> upstream/master
 	}
 
 	return tmap
 }
 
-<<<<<<< HEAD
 func (m *DbMap) readStructColumns(t reflect.Type, tm *TableMap) (cols []*ColumnMap) {
 
 	// Create slice for primary keys - initially empty
 	tm.keys = make([]*ColumnMap, 0)
 
-=======
-func (m *DbMap) readStructColumns(t reflect.Type) (cols []*ColumnMap, primaryKey []*ColumnMap) {
-	primaryKey = make([]*ColumnMap, 0)
->>>>>>> upstream/master
 	n := t.NumField()
 	for i := 0; i < n; i++ {
 		f := t.Field(i)
 		if f.Anonymous && f.Type.Kind() == reflect.Struct {
 			// Recursively add nested fields in embedded structs.
-<<<<<<< HEAD
 			subcols := m.readStructColumns(f.Type, tm)
-=======
-			subcols, subpk := m.readStructColumns(f.Type)
->>>>>>> upstream/master
 			// Don't append nested fields that have the same field
 			// name as an already-mapped field.
 			for _, subcol := range subcols {
@@ -1020,56 +1000,12 @@ func (m *DbMap) readStructColumns(t reflect.Type) (cols []*ColumnMap, primaryKey
 					cols = append(cols, subcol)
 				}
 			}
-			if subpk != nil {
-				primaryKey = append(primaryKey, subpk...)
-			}
 		} else {
-<<<<<<< HEAD
 			// Parse all field tags into a GorpParsedTag
 			pt := m.ParseTag(f.Tag)
 
 			if pt.ColumnName == "" {
 				pt.ColumnName = strings.Trim(strings.Split(f.Name, ",")[0], " ")
-=======
-			// Tag = Name { ','  Option }
-			// Option = OptionKey [ ':' OptionValue ]
-			cArguments := strings.Split(f.Tag.Get("db"), ",")
-			columnName := cArguments[0]
-			var maxSize int
-			var defaultValue string
-			var isAuto bool
-			var isPK bool
-			for _, argString := range cArguments[1:] {
-				argString = strings.TrimSpace(argString)
-				arg := strings.SplitN(argString, ":", 2)
-
-				// check mandatory/unexpected option values
-				switch arg[0] {
-				case "size", "default":
-					// options requiring value
-					if len(arg) == 1 {
-						panic(fmt.Sprintf("missing option value for option %v on field %v", arg[0], f.Name))
-					}
-				default:
-					// options where value is invalid (currently all other options)
-					if len(arg) == 2 {
-						panic(fmt.Sprintf("unexpected option value for option %v on field %v", arg[0], f.Name))
-					}
-				}
-
-				switch arg[0] {
-				case "size":
-					maxSize, _ = strconv.Atoi(arg[1])
-				case "default":
-					defaultValue = arg[1]
-				case "primarykey":
-					isPK = true
-				case "autoincrement":
-					isAuto = true
-				default:
-					panic(fmt.Sprintf("Unrecognized tag option for field %v: %v", f.Name, arg))
-				}
->>>>>>> upstream/master
 			}
 
 			// Is this field is marked as a relation to a child/detail struct/table?
@@ -1120,7 +1056,6 @@ func (m *DbMap) readStructColumns(t reflect.Type) (cols []*ColumnMap, primaryKey
 			}
 
 			cm := &ColumnMap{
-<<<<<<< HEAD
 				ColumnName:     pt.ColumnName,
 				Transient:      pt.Transient,
 				fieldName:      f.Name,
@@ -1132,19 +1067,6 @@ func (m *DbMap) readStructColumns(t reflect.Type) (cols []*ColumnMap, primaryKey
 				Unique:         pt.IsFieldUnique,
 				isPK:           pt.IsPk,
 				isAutoIncr:     pt.IsAutoIncr,
-=======
-				ColumnName:   columnName,
-				DefaultValue: defaultValue,
-				Transient:    columnName == "-",
-				fieldName:    f.Name,
-				gotype:       gotype,
-				isPK:         isPK,
-				isAutoIncr:   isAuto,
-				MaxSize:      maxSize,
-			}
-			if isPK {
-				primaryKey = append(primaryKey, cm)
->>>>>>> upstream/master
 			}
 			// Check for nested fields of the same field name and
 			// override them.
@@ -1158,7 +1080,6 @@ func (m *DbMap) readStructColumns(t reflect.Type) (cols []*ColumnMap, primaryKey
 			}
 			if shouldAppend {
 				cols = append(cols, cm)
-
 				// Collect info for Index creation from the current column
 				tm.Indexes = m.addIndexForColumn(cm, f.Tag, *tm)
 
@@ -1172,7 +1093,6 @@ func (m *DbMap) readStructColumns(t reflect.Type) (cols []*ColumnMap, primaryKey
 			}
 
 		}
-
 	}
 
 	tm.ResetSql()
@@ -1278,7 +1198,6 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 	var err error
 	for i := range m.tables {
 		table := m.tables[i]
-<<<<<<< HEAD
 
 		s := bytes.Buffer{}
 
@@ -1357,10 +1276,6 @@ func (m *DbMap) createTables(ifNotExists bool) error {
 		s.WriteString(m.Dialect.QuerySuffix())
 
 		_, err = m.Exec(s.String())
-=======
-		sql := table.SqlForCreate(ifNotExists)
-		_, err = m.Exec(sql)
->>>>>>> upstream/master
 		if err != nil {
 			break
 		}
@@ -2728,7 +2643,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 
 		field, found := t.FieldByNameFunc(func(fieldName string) bool {
 			field, _ := t.FieldByName(fieldName)
-<<<<<<< HEAD
+
 			// Parse all field tags into a GorpParsedTag
 			pt := m.ParseTag(field.Tag)
 
@@ -2741,10 +2656,6 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 				fmt.Printf("columnToFieldIndex pt.ColumnName: %s\n", pt.ColumnName)
 				fmt.Println("----- columnToFieldIndex END -----------")
 			}
-=======
-			cArguments := strings.Split(field.Tag.Get("db"), ",")
-			fieldName = cArguments[0]
->>>>>>> upstream/master
 
 			if pt.Transient {
 				return false
