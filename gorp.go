@@ -242,6 +242,8 @@ type RelationMap struct {
 	ForeignKeyFieldName string
 	DetailTableType     interface{}
 	MasterFieldName     string
+	Limit               uint64 // Limits the number of rows a child query returns
+	Offset              uint64 // Starting at row offset when queriyng a child table
 }
 
 func (r RelationMap) String() string {
@@ -1712,7 +1714,7 @@ func (m *DbMap) Delete(list ...interface{}) (int64, error) {
 // Returns an error if SetKeys has not been called on the TableMap
 // Panics if any interface in the list has not been registered with AddTable
 func (m *DbMap) Get(i interface{}, keys ...interface{}) (interface{}, error) {
-	return get(m, m, i, false, keys...)
+	return get(m, m, i, false, 0, 0, keys...)
 }
 
 // GetWithChilds runs a SQL SELECT to fetch a single row from the table based on the
@@ -1730,8 +1732,8 @@ func (m *DbMap) Get(i interface{}, keys ...interface{}) (interface{}, error) {
 //
 // Returns an error if SetKeys has not been called on the TableMap
 // Panics if any interface in the list has not been registered with AddTable
-func (m *DbMap) GetWithChilds(i interface{}, keys ...interface{}) (interface{}, error) {
-	return get(m, m, i, true, keys...)
+func (m *DbMap) GetWithChilds(i interface{}, ChildLimit int64, ChildOffset int64, keys ...interface{}) (interface{}, error) {
+	return get(m, m, i, true, ChildLimit, ChildOffset, keys...)
 }
 
 // Select runs an arbitrary SQL query, binding the columns in the result
@@ -2063,7 +2065,7 @@ func (t *Transaction) Delete(list ...interface{}) (int64, error) {
 
 // Get has the same behavior as DbMap.Get(), but runs in a transaction.
 func (t *Transaction) Get(i interface{}, keys ...interface{}) (interface{}, error) {
-	return get(t.dbmap, t, i, false, keys...)
+	return get(t.dbmap, t, i, false, 0, 0, keys...)
 }
 
 // Select has the same behavior as DbMap.Select(), but runs in a transaction.
@@ -2766,7 +2768,7 @@ func toType(i interface{}) (reflect.Type, error) {
 	return t, nil
 }
 
-func get(m *DbMap, exec SqlExecutor, i interface{}, getChilds bool,
+func get(m *DbMap, exec SqlExecutor, i interface{}, getChilds bool, ChildLimit int64, ChildOffset int64,
 	keys ...interface{}) (interface{}, error) {
 
 	t, err := toType(i)
@@ -2836,8 +2838,19 @@ func get(m *DbMap, exec SqlExecutor, i interface{}, getChilds bool,
 			}
 			if fv.Kind() == reflect.Slice {
 
-				sql := fmt.Sprintf("select * from %s where %s = %d", m.Dialect.QuotedTableForQuery(table.SchemaName, r.DetailTable.TableName),
+				sql := fmt.Sprintf("select * from %s where %s = %d",
+					m.Dialect.QuotedTableForQuery(table.SchemaName, r.DetailTable.TableName),
 					m.Dialect.QuoteField(r.ForeignKeyFieldName), PkId)
+
+				if (ChildLimit > -1) && (ChildOffset > -1) {
+					sql = fmt.Sprintf(sql+" limit %d offset %d", ChildLimit, ChildOffset)
+				} else {
+					if (ChildLimit < 0) && (ChildOffset > 0) {
+						ChildLimit = 999999999999999999
+						sql = fmt.Sprintf(sql+" limit %d offset %d", ChildLimit, ChildOffset)
+					}
+				}
+
 				_, err = m.Select(fv.Addr().Interface(), sql)
 				if err != nil {
 					return nil, errors.New("Get child relation " + r.DetailTable.TableName + " failed: " + err.Error())
@@ -3341,7 +3354,7 @@ func lockError(m *DbMap, exec SqlExecutor, tableName string,
 	existingVer int64, elem reflect.Value,
 	keys ...interface{}) (int64, error) {
 
-	existing, err := get(m, exec, elem.Interface(), false, keys...)
+	existing, err := get(m, exec, elem.Interface(), false, 0, 0, keys...)
 	if err != nil {
 		return -1, err
 	}
