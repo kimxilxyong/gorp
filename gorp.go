@@ -27,6 +27,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -948,7 +949,7 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 		table := m.tables[i]
 		if table.gotype == t {
 			if m.DebugLevel > 3 {
-				fmt.Printf("AddTableWithNameAndSchema changed table name from %s to %s\n", table.TableName, name)
+				log.Printf("AddTableWithNameAndSchema changed table name from %s to %s\n", table.TableName, name)
 			}
 
 			table.TableName = name
@@ -957,7 +958,7 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 	}
 
 	if m.DebugLevel > 3 {
-		fmt.Printf("AddTable type %v\n", t)
+		log.Printf("AddTable type %v\n", t)
 	}
 
 	tmap := &TableMap{gotype: t, TableName: name, SchemaName: schema, dbmap: m}
@@ -967,9 +968,9 @@ func (m *DbMap) AddTableWithNameAndSchema(i interface{}, schema string, name str
 	m.tables = append(m.tables, tmap)
 	if m.DebugLevel > 3 {
 		for i, testim := range tmap.Indexes {
-			fmt.Printf("tm.Indexes %d: indexname %s\n", i, testim.IndexName)
+			log.Printf("tm.Indexes %d: indexname %s\n", i, testim.IndexName)
 			for x, testfn := range testim.fieldNames {
-				fmt.Printf("tm.Indexes %d: indexname %s, field %d: %s\n", i, testim.IndexName, x, testfn)
+				log.Printf("tm.Indexes %d: indexname %s, field %d: %s\n", i, testim.IndexName, x, testfn)
 			}
 		}
 	}
@@ -1154,8 +1155,8 @@ func (m *DbMap) addIndexForColumn(cm *ColumnMap, tag reflect.StructTag, tm Table
 				shouldAppend = false
 
 				if m.DebugLevel > 3 {
-					fmt.Println("addIndexForColumn append: index: " + it.IndexName + " field: cm.fieldName: " + cm.fieldName)
-					fmt.Println("addIndexForColumn append: index: " + it.IndexName + " field: cm.ColumnName: " + cm.ColumnName)
+					log.Println("addIndexForColumn append: index: " + it.IndexName + " field: cm.fieldName: " + cm.fieldName)
+					log.Println("addIndexForColumn append: index: " + it.IndexName + " field: cm.ColumnName: " + cm.ColumnName)
 				}
 				break
 			}
@@ -1172,8 +1173,8 @@ func (m *DbMap) addIndexForColumn(cm *ColumnMap, tag reflect.StructTag, tm Table
 			indexes = append(indexes, im)
 
 			if m.DebugLevel > 3 {
-				fmt.Println("addIndexForColumn new: index: " + it.IndexName + " field: cm.fieldName: " + cm.fieldName)
-				fmt.Println("addIndexForColumn new: index: " + it.IndexName + " field: cm.ColumnName: " + cm.ColumnName)
+				log.Println("addIndexForColumn new: index: " + it.IndexName + " field: cm.fieldName: " + cm.fieldName)
+				log.Println("addIndexForColumn new: index: " + it.IndexName + " field: cm.ColumnName: " + cm.ColumnName)
 			}
 		}
 	}
@@ -1321,7 +1322,7 @@ func (m *DbMap) createIndexes(ifNotExists bool) error {
 
 			// DEBUG
 			if m.DebugLevel > 3 {
-				fmt.Printf("Index: %s, on table %s, exists %t, matches: %t\n", index.IndexName, table.TableName, exists, matches)
+				log.Printf("Index: %s, on table %s, exists %t, matches: %t\n", index.IndexName, table.TableName, exists, matches)
 			}
 
 			if exists {
@@ -1948,7 +1949,10 @@ type GorpParsedIndexTag struct {
 	ForeignKey    string
 }
 
-// ParseTag extracts all field tags from input param tag and resturns all found options
+// ParseTag extracts all field tags from input param tag and returns all found options
+// Tag key can be ether "db" (the legacy default) or "gorp"
+// "gorp" has been added in this fork only, the intent is to avoid namespace conflicts
+// with other database packages for go
 /* Example:
 type Post struct {
 	Id           uint64    `db:"notnull, PID, primarykey, autoincrement"`
@@ -1970,9 +1974,7 @@ type Post struct {
 */
 func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 
-	//(columnName string, indexName string,
-	//	maxColumnSize int, isNotNull bool, isFieldUnique bool, isAutoIncr bool, isPk bool) {
-
+	// Get the tags from the struct field ether by tagname "gorp" or "db"
 	ts := tag.Get("gorp")
 	if ts == "" {
 		ts = tag.Get("db")
@@ -1981,9 +1983,6 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 		// not tags found, exit early
 		return
 	}
-
-	// Create the return struct
-	//pt = new(GorpParsedTag)
 
 	if ts == "-" {
 		// Ignore this column
@@ -1996,6 +1995,7 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 		for _, tag := range tags {
 			o := strings.Split(tag, ":")
 			o[0] = strings.ToLower(strings.Trim(o[0], " "))
+
 			switch o[0] {
 			case "name":
 				pt.ColumnName = strings.Trim(o[1], " ")
@@ -2016,7 +2016,11 @@ func (m *DbMap) ParseTag(tag reflect.StructTag) (pt GorpParsedTag) {
 				it.IsIndexUnique = true
 				pt.Indexes = append(pt.Indexes, it)
 			case "size":
-				pt.MaxColumnSize, _ = strconv.Atoi(o[1])
+				var ErrAtoi error
+				pt.MaxColumnSize, ErrAtoi = strconv.Atoi(strings.Trim(o[1], " "))
+				if ErrAtoi != nil {
+					panic(fmt.Sprintf("Int conversion for tag 'size:%s' failed: %s", o[1], ErrAtoi.Error()))
+				}
 			case "type":
 				pt.DbType = strings.Trim(o[1], " ")
 			case "notnull":
@@ -2380,9 +2384,15 @@ func hookedselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
 	list, err := rawselect(m, exec, i, query, args...)
 	if err != nil {
 		if !NonFatalError(err) {
+			if m.DebugLevel > 0 {
+				log.Printf("[gorp] hookedselect error: %d\n", err.Error())
+			}
 			return nil, err
 		}
 		nonFatalErr = err
+		if m.DebugLevel > 0 {
+			log.Printf("[gorp] hookedselect nonFatalErr: %d\n", nonFatalErr.Error())
+		}
 	}
 
 	// Determine where the results are: written to i, or returned in list
@@ -2444,12 +2454,25 @@ func rawselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
 		query, args = maybeExpandNamedQuery(m, query, args)
 	}
 
+	if m.DebugLevel > 2 {
+		log.Printf("[gorp] rawselect start\n")
+	}
+
 	// Run the query
 	rows, err := exec.query(query, args...)
 	if err != nil {
+		if m.DebugLevel > 0 {
+			log.Printf("[gorp] rawselect exec.query error: %d\n", err.Error())
+		}
+
 		return nil, err
 	}
 	defer rows.Close()
+	if rows.Err() != nil {
+		if m.DebugLevel > 2 {
+			log.Printf("[gorp] rawselect rows error: %d\n", rows.Err())
+		}
+	}
 
 	// Fetch the column names as returned from db
 	cols, err := rows.Columns()
@@ -2463,6 +2486,7 @@ func rawselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
 
 	var colToFieldIndex [][]int
 	if intoStruct {
+		// TODO - try to cache the columnToFieldIndex map
 		colToFieldIndex, err = columnToFieldIndex(m, t, cols)
 		if err != nil {
 			if !NonFatalError(err) {
@@ -2489,6 +2513,7 @@ func rawselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
 			// time to exit from outer "for" loop
 			break
 		}
+
 		v := reflect.New(t)
 		dest := make([]interface{}, len(cols))
 
@@ -2625,6 +2650,7 @@ func expandNamedQuery(m *DbMap, query string, keyGetter func(key string) reflect
 	}), args
 }
 
+// columnToFieldIndex
 func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error) {
 	colToFieldIndex := make([][]int, len(cols))
 
@@ -2636,9 +2662,9 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 		tableMapped = true
 	}
 
-	// Loop over column names and find field in i to bind to
+	// Loop over column names and find field in t to bind to
 	// based on column name. all returned columns must match
-	// a field in the i struct
+	// a field in the t struct
 	missingColNames := []string{}
 	for x := range cols {
 		colName := strings.ToLower(cols[x])
@@ -2651,12 +2677,12 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 
 			if m.DebugLevel > 3 {
 				// DEBUG
-				fmt.Printf("columnToFieldIndex LOOKING FOR: %s\n", colName)
-				fmt.Printf("columnToFieldIndex Name: %s\n", field.Name)
-				fmt.Printf("columnToFieldIndex PkgPath: %s\n", field.PkgPath)
-				fmt.Printf("columnToFieldIndex Tag: %s\n", field.Tag)
-				fmt.Printf("columnToFieldIndex pt.ColumnName: %s\n", pt.ColumnName)
-				fmt.Println("----- columnToFieldIndex END -----------")
+				log.Printf("columnToFieldIndex LOOKING FOR: %s\n", colName)
+				log.Printf("columnToFieldIndex Name: %s\n", field.Name)
+				log.Printf("columnToFieldIndex PkgPath: %s\n", field.PkgPath)
+				log.Printf("columnToFieldIndex Tag: %s\n", field.Tag)
+				log.Printf("columnToFieldIndex pt.ColumnName: %s\n", pt.ColumnName)
+				log.Println("----- columnToFieldIndex END -----------")
 			}
 
 			if pt.Transient {
@@ -2670,7 +2696,7 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 
 					if m.DebugLevel > 3 {
 						// DEBUG
-						fmt.Printf("Changed ColumnName from %s to %s\n", pt.ColumnName, colMap.ColumnName)
+						log.Printf("Changed ColumnName from %s to %s\n", pt.ColumnName, colMap.ColumnName)
 					}
 					pt.ColumnName = colMap.ColumnName
 				}
@@ -2681,9 +2707,9 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 			if m.DebugLevel > 3 {
 				// DEBUG
 				if ColMatches {
-					fmt.Println("--!!!! YES MATCHES !!!!-----------")
+					log.Println("--!!!! YES MATCHES !!!!-----------")
 				} else {
-					fmt.Println("----------------------------------")
+					log.Println("----------------------------------")
 				}
 			}
 
@@ -2698,9 +2724,9 @@ func columnToFieldIndex(m *DbMap, t reflect.Type, cols []string) ([][]int, error
 
 		if m.DebugLevel > 3 {
 			// DEBUG
-			fmt.Printf("colToFieldIndex[x]: %v\n ", colToFieldIndex[x])
-			fmt.Println("columnToFieldIndex colName: " + colName)
-			fmt.Println("columnToFieldIndex fieldName: " + field.Name)
+			log.Printf("colToFieldIndex[x]: %v\n ", colToFieldIndex[x])
+			log.Println("columnToFieldIndex colName: " + colName)
+			log.Println("columnToFieldIndex fieldName: " + field.Name)
 		}
 	}
 	if len(missingColNames) > 0 {
@@ -3272,12 +3298,12 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 		// Check if the foreign key of the detail matches with the primary key of the master table
 		if fd.Uint() == PK {
 			if m.DebugLevel > 3 {
-				fmt.Printf("r.ForeignKeyFieldName %s matches: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
+				log.Printf("r.ForeignKeyFieldName %s matches: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
 			}
 		} else {
 
 			if m.DebugLevel > 3 {
-				fmt.Printf("r.ForeignKeyFieldName %s does not match: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
+				log.Printf("r.ForeignKeyFieldName %s does not match: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
 			}
 
 			// Set the foreign key of this detail
