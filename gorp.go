@@ -201,8 +201,9 @@ type DbMap struct {
 	logger    GorpLogger
 	logPrefix string
 
-	DebugLevel int
-	LastOpInfo CRUDInfo // info about the last operation on this database
+	DebugLevel        int
+	LastOpInfo        CRUDInfo // info about the last operation on this database
+	CheckAffectedRows bool     // if true an error is raised if affected rows was 0
 }
 
 // TableMap represents a mapping between a Go struct and a database table
@@ -2454,7 +2455,7 @@ func rawselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
 		query, args = maybeExpandNamedQuery(m, query, args)
 	}
 
-	if m.DebugLevel > 2 {
+	if m.DebugLevel > 3 {
 		log.Printf("[gorp] rawselect start\n")
 	}
 
@@ -2981,20 +2982,42 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 				return -1, err
 			}
 		}
-
-		bi, err := table.bindUpdate(elem)
+		// Get the primaty key for this table
+		// Use the first PK found, multiple PKs are not supported
+		// by now and will yield an error
+		PkId, _, err := m.GetPrimaryKey(*table, elem)
 		if err != nil {
-			return -1, err
+			return count, errors.New("GetPrimaryKey failed: " + err.Error())
+		}
+		if m.DebugLevel > 2 {
+			fmt.Printf("Update table %s with primarykey %d\n", table.TableName, PkId)
 		}
 
-		res, err := exec.Exec(bi.query, bi.args...)
-		if err != nil {
-			return -1, fmt.Errorf("gorp: update failed for table '%s': %s", table.TableName, err.Error())
-		}
-
-		rows, err := res.RowsAffected()
-		if err != nil {
-			return -1, err
+		var bi bindInstance
+		var rows int64
+		if PkId == 0 {
+			err = insert(m, exec, false, ptr)
+			//bi, err = table.bindInsert(elem)
+			if err != nil {
+				return -1, err
+			}
+			if m.DebugLevel > 2 {
+				fmt.Printf("Update table %s has empty primary key, doing insert\n", table.TableName)
+			}
+		} else {
+			bi, err = table.bindUpdate(elem)
+			if err != nil {
+				return -1, err
+			}
+			res, err := exec.Exec(bi.query, bi.args...)
+			if err != nil {
+				return -1, fmt.Errorf("gorp: update failed for table '%s': %s", table.TableName, err.Error())
+			}
+			rows, err := res.RowsAffected()
+			fmt.Printf("!!!!!RowsAffected %d\n", rows)
+			if err != nil {
+				return -1, err
+			}
 		}
 
 		if rows == 0 && bi.existingVersion > 0 {
@@ -3016,9 +3039,16 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 			// Get the primaty key for this table
 			// Use the first PK found, multiple PKs are not supported
 			// by now and will yield an error
-			PkId, _, err := m.GetPrimaryKey(*table, elem)
+			PkId, _, err = m.GetPrimaryKey(*table, elem)
 			if err != nil {
 				return count, errors.New("GetPrimaryKey failed: " + err.Error())
+			}
+			if PkId == 0 {
+				return -1, errors.New(fmt.Sprintf("Update childs of table %s failed, primary key is zero\n", table.TableName))
+			}
+			//m.SetPrimaryKey(*table, elem, PkId)
+			if m.DebugLevel > 2 {
+				fmt.Printf("Update childs of table %s with primarykey %d\n", table.TableName, PkId)
 			}
 			// Update child records if present
 			for _, r := range table.Relations {
@@ -3076,6 +3106,44 @@ func (m *DbMap) GetPrimaryKey(table TableMap, elem reflect.Value) (PkId uint64, 
 		PkId = uint64(f.Int())
 	} else if (k == reflect.Uint) || (k == reflect.Uint16) || (k == reflect.Uint32) || (k == reflect.Uint64) {
 		PkId = f.Uint()
+	} else {
+		err = fmt.Errorf("Primary key '%s' in table '%s' is not of type int or uint", PkName, table.TableName)
+		return
+	}
+	return
+}
+
+// SetPrimaryKey sets the primary key of a inmemory table if it exists
+func (m *DbMap) SetPrimaryKey(table TableMap, elem reflect.Value, pk int64) (err error) {
+
+	var PkName string
+	// Get the primaty key for this table, multiple PKs are not supported by now
+	for _, c := range table.Columns {
+		if c.isPK {
+			if PkName == "" {
+				PkName = c.fieldName
+			} else {
+				err = fmt.Errorf("unsupported multiple primarykeys found in table '%s'", table.TableName)
+				return
+			}
+		}
+	}
+
+	if PkName == "" {
+		err = fmt.Errorf("No primary key found in table '%s'", table.TableName)
+		return
+	}
+	// Get the value of the primary key
+	f := elem.FieldByName(PkName)
+	if !f.IsValid() {
+		err = fmt.Errorf("Field '%s' not found in table '%s'", PkName, table.TableName)
+		return
+	}
+	k := f.Kind()
+	if (k == reflect.Int) || (k == reflect.Int16) || (k == reflect.Int32) || (k == reflect.Int64) {
+		f.SetInt(pk)
+	} else if (k == reflect.Uint) || (k == reflect.Uint16) || (k == reflect.Uint32) || (k == reflect.Uint64) {
+		f.SetUint(uint64(pk))
 	} else {
 		err = fmt.Errorf("Primary key '%s' in table '%s' is not of type int or uint", PkName, table.TableName)
 		return
@@ -3297,12 +3365,12 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 
 		// Check if the foreign key of the detail matches with the primary key of the master table
 		if fd.Uint() == PK {
-			if m.DebugLevel > 3 {
+			if m.DebugLevel > 2 {
 				log.Printf("r.ForeignKeyFieldName %s matches: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
 			}
 		} else {
 
-			if m.DebugLevel > 3 {
+			if m.DebugLevel > 2 {
 				log.Printf("r.ForeignKeyFieldName %s does not match: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
 			}
 
@@ -3334,7 +3402,7 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 				err = errors.New(fmt.Sprintf("UpdateDetailsFromSlice failed for detailPkId: %d: %s", detailPkId, err.Error()))
 				return
 			}
-			if affected == 0 {
+			if (affected == 0) && (m.CheckAffectedRows == true) {
 				err = errors.New(fmt.Sprintf("UpdateDetailsFromSlice affected 0 records for detailPkId: %d\n", detailPkId))
 				return
 			}
