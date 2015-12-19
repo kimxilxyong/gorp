@@ -3001,6 +3001,7 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 			if err != nil {
 				return -1, err
 			}
+			rows = 1
 			if m.DebugLevel > 2 {
 				fmt.Printf("Update table %s has empty primary key, doing insert\n", table.TableName)
 			}
@@ -3013,8 +3014,10 @@ func update(m *DbMap, exec SqlExecutor, updateChilds bool, list ...interface{}) 
 			if err != nil {
 				return -1, fmt.Errorf("gorp: update failed for table '%s': %s", table.TableName, err.Error())
 			}
-			rows, err := res.RowsAffected()
-			fmt.Printf("!!!!!RowsAffected %d\n", rows)
+			rows, err = res.RowsAffected()
+			if m.DebugLevel > 2 {
+				fmt.Printf("Update RowsAffected %d\n", rows)
+			}
 			if err != nil {
 				return -1, err
 			}
@@ -3365,15 +3368,14 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 
 		// Check if the foreign key of the detail matches with the primary key of the master table
 		if fd.Uint() == PK {
-			if m.DebugLevel > 2 {
+			if m.DebugLevel > 3 {
 				log.Printf("r.ForeignKeyFieldName %s matches: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
 			}
 		} else {
 
-			if m.DebugLevel > 2 {
+			if m.DebugLevel > 3 {
 				log.Printf("r.ForeignKeyFieldName %s does not match: %d, %d\n", r.ForeignKeyFieldName, fd.Uint(), PK)
 			}
-
 			// Set the foreign key of this detail
 			if fd.Kind() == reflect.Uint32 || fd.Kind() == reflect.Uint64 {
 				fd.SetUint(PK)
@@ -3383,8 +3385,11 @@ func (m *DbMap) UpdateDetailsFromSlice(elem reflect.Value, r *RelationMap, PK ui
 				err = errors.New(fmt.Sprintf("UpdateDetailsFromSlice failed: ForeignKey '%s' has incorrect type: '%s'", r.ForeignKeyFieldName, fd.Kind().String()))
 				return
 			}
-
+			if m.DebugLevel > 3 {
+				log.Printf("r.ForeignKeyFieldName %s has been updated to %d\n", r.ForeignKeyFieldName, fd.Uint())
+			}
 		}
+
 		if detailPkId == 0 {
 
 			err = m.Insert(fv0)
